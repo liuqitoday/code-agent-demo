@@ -1,0 +1,32 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+*.class
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Mac
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Claude Code
+.claude/
+
+# Agent workspace
+workspace/
+
+# Extracted dependencies
+org/
+reactor/
+META-INF/
+
+# Environment variables
+.env
+.env.local
