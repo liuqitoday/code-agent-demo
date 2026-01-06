@@ -1,6 +1,7 @@
 package com.liuqitech.codeagent.agent;
 
 import com.liuqitech.codeagent.config.AgentProperties;
+import com.liuqitech.codeagent.config.LoggingInterceptor;
 import com.liuqitech.codeagent.memory.ConversationMemory;
 import com.liuqitech.codeagent.tool.CodeAgentTools;
 import org.slf4j.Logger;
@@ -31,52 +32,45 @@ public class CodeAgent {
     
     /**
      * 系统提示词 - 定义 Agent 的身份和行为
-     * 使用 ReAct (Reasoning + Acting) 模式
+     *
+     * 注意：Spring AI 的 Tool Calling 机制已经实现了 ReAct 模式的核心循环：
+     * 1. LLM 分析用户请求，决定是否需要调用工具（Reasoning）
+     * 2. 如果需要，LLM 返回 tool_calls，Spring AI 自动执行工具（Acting）
+     * 3. 工具执行结果自动发送回 LLM（Observation）
+     * 4. LLM 根据结果继续思考，可能再次调用工具或返回最终答案
+     * 5. 循环直到 LLM 返回普通文本响应
+     *
+     * 因此，System Prompt 只需要定义 Agent 的身份和行为准则，
+     * 不需要显式要求 LLM 输出 [Thought]/[Action]/[Observation] 格式，
+     * 因为这些步骤已经由框架自动处理。
      */
     private static final String SYSTEM_PROMPT = """
-        你是一个专业的代码生成助手，使用 ReAct (Reasoning + Acting) 模式工作。
-        
-        ## ReAct 工作模式
-        你必须按照以下格式进行思考和行动：
-        
-        [Thought]: [分析用户需求，思考需要做什么，决定下一步行动]
-        [Action]: [描述要执行的操作，如调用工具或生成代码]
-        [Observation]: [观察操作结果]
-        ... (可以重复多次 Thought/Action/Observation 直到任务完成)
-        [Final Answer]: [给出最终回答]
-        
+        你是一个专业的代码生成助手。
+
         ## 你的能力
-        - 根据用户描述生成各种编程语言的代码（Java、Python、JavaScript、Go、TypeScript 等）
-        - 创建新的代码文件（使用 createFile 工具）
-        - 读取已有文件内容（使用 readFile 工具）
-        - 列出目录结构（使用 listDirectory 工具）
-        - 创建目录（使用 createDirectory 工具）
-        
-        ## 行为准则
-        1. 先用 Thought 分析用户需求
-        2. 再决定需要的 Action（生成代码或调用工具）
-        3. 如果调用工具，等待 Observation 结果
-        4. 根据结果继续思考或给出最终答案
-        5. 生成的代码应该简洁、可读、符合最佳实践
-        6. 必须包含必要的注释说明
-        
+        你可以使用以下工具来完成任务：
+        - createFile: 创建新的代码文件并写入内容
+        - readFile: 读取已有文件的内容
+        - listDirectory: 列出目录结构
+        - createDirectory: 创建新目录
+
+        ## 工作方式
+        1. 仔细分析用户的需求
+        2. 如果需要创建文件，直接调用 createFile 工具
+        3. 如果需要了解现有代码，先用 readFile 或 listDirectory 查看
+        4. 根据工具执行结果，决定下一步操作或给出最终回答
+
         ## 代码质量要求
+        - 生成的代码应该简洁、可读、符合最佳实践
+        - 必须包含必要的注释说明
         - Java: 遵循阿里巴巴 Java 开发规范
         - Python: 遵循 PEP 8 规范
         - JavaScript/TypeScript: 遵循 ESLint 推荐配置
-        
-        ## 示例
-        用户: 创建一个 Hello World 的 Java 类
-        
-        [Thought]: 用户需要一个简单的 Java Hello World 程序。我需要：
-        1. 创建一个 Java 类文件
-        2. 包含 main 方法输出 Hello World
-        
-        [Action]: 调用 createFile 工具创建 HelloWorld.java
-        
-        [Observation]: 文件创建成功
-        
-        [Final Answer]: 我已经为您创建了 HelloWorld.java 文件，包含一个简单的 main 方法...
+
+        ## 回答要求
+        - 完成任务后，简要说明你做了什么
+        - 如果创建了文件，告知文件路径
+        - 如果遇到问题，清晰地说明原因和建议
         """;
     
     private final ChatClient.Builder chatClientBuilder;
@@ -137,13 +131,13 @@ public class CodeAgent {
     
     /**
      * 执行用户请求
-     * 
+     *
      * @param userRequest 用户的自然语言请求
      * @return 执行结果
      */
     public AgentResponse execute(String userRequest) {
-        // 控制台输出 - 用户可见
-        System.out.println("\n[处理中] 正在处理您的请求...\n");
+        // 重置轮次计数器
+        LoggingInterceptor.resetRoundCounter();
 
         // 详细日志 - 记录到文件
         log.info("");
@@ -174,7 +168,7 @@ public class CodeAgent {
 
             if (conversationMemory.size() > 0) {
                 log.debug("\n[History ({} messages)]:", conversationMemory.size());
-                log.debug(conversationMemory.toString()); // Ensure ConversationMemory has a toString or accessible content
+                log.debug(conversationMemory.toString());
             }
 
             log.debug("\n[User Input]:\n{}", userRequest);
@@ -200,20 +194,23 @@ public class CodeAgent {
 
                     // 成功，跳出重试循环
                     break;
-                    
+
                 } catch (Exception e) {
                     lastException = e;
                     String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-                    
+
                     // 判断是否为超时相关错误
                     boolean isTimeout = isTimeoutException(e);
-                    
+
                     if (isTimeout && attempt < maxRetries) {
                         // 超时错误，尝试重试
                         log.warn("");
                         log.warn("[重试 {}/{}] 调用超时，正在等待后重试...", attempt, maxRetries);
                         log.warn("   错误信息: {}", errorMsg);
-                        
+
+                        // 控制台通知用户
+                        System.out.println("\n⏳ [重试 " + attempt + "/" + maxRetries + "] 请求超时，正在重试...");
+
                         // 等待一段时间后重试（指数退避）
                         long waitTime = attempt * 2000L; // 2秒, 4秒, 6秒
                         log.info("   等待 {} 秒后重试...", waitTime / 1000);
@@ -321,24 +318,26 @@ public class CodeAgent {
             log.info("[完成] 请求处理成功!");
             log.info("========================================");
 
-            // 控制台输出 - 用户可见
-            System.out.println("\n[成功]");
-            printFormattedResponse(response, reasoningContent);
+            // 控制台输出 - 用户可见（包含耗时信息）
+            printFormattedResponse(response, reasoningContent, duration);
 
             // 构建成功响应
             return AgentResponse.success(response);
-            
+
         } catch (Exception e) {
             log.error("");
             log.error("========================================");
             log.error("[错误] 执行请求失败");
             log.error("========================================");
-            
+
             // 构建用户友好的错误信息
             String userMessage = buildUserFriendlyErrorMessage(e);
             log.error("错误详情: {}", userMessage);
             log.debug("异常堆栈:", e);
-            
+
+            // 控制台输出错误
+            System.out.println("\n❌ [错误] " + userMessage);
+
             return AgentResponse.error(userMessage);
         }
     }
@@ -461,13 +460,13 @@ public class CodeAgent {
 
     /**
      * 格式化输出响应内容到控制台
-     * 提取并高亮显示Thought和Final Answer部分
      *
      * @param response 响应内容
-     * @param reasoningContent 思考过程内容（来自API的reasoning_content字段）
+     * @param reasoningContent 思考过程内容（来自API的reasoning_content字段，如DeepSeek等模型支持）
+     * @param durationMs 请求耗时（毫秒）
      */
-    private void printFormattedResponse(String response, String reasoningContent) {
-        // 首先输出reasoning_content（如果有）
+    private void printFormattedResponse(String response, String reasoningContent, long durationMs) {
+        // 输出reasoning_content（如果有，某些模型如DeepSeek会返回思考过程）
         if (reasoningContent != null && !reasoningContent.isEmpty()) {
             System.out.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             System.out.println("💭 [思考过程]");
@@ -476,89 +475,20 @@ public class CodeAgent {
             System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         }
 
-        if (response == null || response.isEmpty()) {
-            if (reasoningContent == null || reasoningContent.isEmpty()) {
-                System.out.println("(无响应内容)");
-            }
-            return;
+        // 输出主要响应内容
+        if (response != null && !response.isEmpty()) {
+            System.out.println("\n" + response);
+        } else if (reasoningContent == null || reasoningContent.isEmpty()) {
+            System.out.println("(无响应内容)");
         }
 
-        // 分割响应内容
-        String[] lines = response.split("\n");
-        boolean inThought = false;
-        boolean inFinalAnswer = false;
-        StringBuilder thoughtContent = new StringBuilder();
-        StringBuilder finalAnswerContent = new StringBuilder();
-
-        for (String line : lines) {
-            String trimmedLine = line.trim();
-
-            // 检测Thought部分
-            if (trimmedLine.startsWith("[Thought]:") || trimmedLine.contains("[Thought]:")) {
-                inThought = true;
-                inFinalAnswer = false;
-                // 提取Thought后的内容
-                int index = trimmedLine.indexOf("[Thought]:");
-                if (index >= 0) {
-                    String content = trimmedLine.substring(index + "[Thought]:".length()).trim();
-                    if (!content.isEmpty()) {
-                        thoughtContent.append(content).append("\n");
-                    }
-                }
-                continue;
-            }
-
-            // 检测Final Answer部分
-            if (trimmedLine.startsWith("[Final Answer]:") || trimmedLine.contains("[Final Answer]:")) {
-                inThought = false;
-                inFinalAnswer = true;
-                // 提取Final Answer后的内容
-                int index = trimmedLine.indexOf("[Final Answer]:");
-                if (index >= 0) {
-                    String content = trimmedLine.substring(index + "[Final Answer]:".length()).trim();
-                    if (!content.isEmpty()) {
-                        finalAnswerContent.append(content).append("\n");
-                    }
-                }
-                continue;
-            }
-
-            // 检测Action或Observation标记（结束Thought）
-            if (trimmedLine.startsWith("[Action]:") || trimmedLine.startsWith("[Observation]:")) {
-                inThought = false;
-                continue;
-            }
-
-            // 收集内容
-            if (inThought && !trimmedLine.isEmpty()) {
-                // 跳过</think>标签
-                if (!trimmedLine.equals("</think>") && !trimmedLine.equals("</thinking>")) {
-                    thoughtContent.append(line).append("\n");
-                }
-            } else if (inFinalAnswer && !trimmedLine.isEmpty()) {
-                finalAnswerContent.append(line).append("\n");
-            }
+        // 输出耗时信息
+        String timeStr;
+        if (durationMs < 1000) {
+            timeStr = durationMs + "ms";
+        } else {
+            timeStr = String.format("%.1fs", durationMs / 1000.0);
         }
-
-        // 输出Thought部分（如果有且没有reasoning_content）
-        if (thoughtContent.length() > 0 && (reasoningContent == null || reasoningContent.isEmpty())) {
-            System.out.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("💭 [思考过程]");
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println(thoughtContent.toString().trim());
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        }
-
-        // 输出Final Answer部分（如果有）
-        if (finalAnswerContent.length() > 0) {
-            System.out.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println("✅ [最终回答]");
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            System.out.println(finalAnswerContent.toString().trim());
-            System.out.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-        } else if (thoughtContent.length() == 0 && (reasoningContent == null || reasoningContent.isEmpty())) {
-            // 如果既没有Thought也没有Final Answer，也没有reasoning_content，输出原始内容
-            System.out.println("\n" + response + "\n");
-        }
+        System.out.println("\n✅ 完成 (耗时: " + timeStr + ")\n");
     }
 }
