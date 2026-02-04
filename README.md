@@ -7,7 +7,8 @@
 - **自然语言驱动**：通过自然语言描述生成代码
 - **Tool Calling**：支持 LLM 工具调用，自动创建文件
 - **文件操作**：创建、读取文件和目录
-- **对话记忆**：支持多轮对话上下文
+- **对话记忆**：使用 Spring AI ChatMemory 支持多轮对话上下文
+- **会话隔离**：支持 conversation ID 实现多会话隔离
 - **交互式命令行**：基于 Spring Shell 的友好交互界面
 
 ## 技术栈
@@ -74,24 +75,23 @@ shell:> exit
 src/main/java/com/liuqitech/codeagent/
 ├── agent/                      # Agent 核心模块
 │   ├── CodeAgent.java          # Agent 主类（核心逻辑）
-│   ├── AgentContext.java       # Agent 上下文
 │   └── AgentResponse.java      # Agent 响应封装
 │
 ├── tool/                       # 工具模块
-│   ├── CodeAgentTools.java     # Agent 工具集（文件操作）
-│   └── ToolResult.java         # 工具执行结果
-│
-├── memory/                     # 记忆模块
-│   └── ConversationMemory.java # 对话记忆管理
+│   └── CodeAgentTools.java     # Agent 工具集（文件操作）
 │
 ├── shell/                      # 命令行模块
 │   └── AgentCommands.java      # Shell 命令定义
 │
 ├── config/                     # 配置模块
-│   └── AgentProperties.java    # Agent 属性配置
+│   ├── AiConfig.java           # AI 配置（ChatMemory、RestClient）
+│   ├── AgentProperties.java    # Agent 属性配置
+│   └── LoggingInterceptor.java # HTTP 日志拦截器
 │
 └── CodeAgentApplication.java   # 应用入口
 ```
+
+> 注：对话记忆使用 Spring AI 内置的 `MessageWindowChatMemory`，通过 `MessageChatMemoryAdvisor` 自动管理。
 
 ## 配置说明
 
@@ -109,9 +109,11 @@ spring.ai.openai:
 # Agent 配置
 agent:
   workspace: ./workspace    # 代码生成目录
-  max-history: 20           # 最大对话历史
+  max-history: 20           # 最大对话历史（ChatMemory 窗口大小）
   default-language: java    # 默认编程语言
 ```
+
+> 日志配置统一在 `logback-spring.xml` 中管理。
 
 ## 核心原理
 

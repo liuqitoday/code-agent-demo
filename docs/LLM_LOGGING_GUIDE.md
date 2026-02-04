@@ -97,48 +97,63 @@
 mvn spring-boot:run
 ```
 
-### 方法 2: 保存到文件
+### 方法 2: 日志文件
 
-如果想保存日志到文件，可以重定向输出：
+日志配置在 `logback-spring.xml` 中，默认输出到 `logs/code-agent.log`：
 
-```bash
-mvn spring-boot:run > logs/app.log 2>&1
+```xml
+<!-- logback-spring.xml -->
+<property name="LOG_FILE" value="logs/code-agent.log"/>
+
+<appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${LOG_FILE}</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+        <fileNamePattern>logs/code-agent-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+        <maxFileSize>10MB</maxFileSize>
+        <maxHistory>30</maxHistory>
+    </rollingPolicy>
+</appender>
 ```
 
-或者在 `application.yml` 中配置日志文件：
+查看日志文件：
 
-```yaml
-logging:
-  file:
-    name: logs/code-agent.log
-  pattern:
-    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+```bash
+# 实时查看
+tail -f logs/code-agent.log
+
+# 或者直接打开
+cat logs/code-agent.log
 ```
 
 ## 日志级别说明
 
-当前配置的日志级别（`application.yml`）：
+日志配置统一在 `logback-spring.xml` 中管理：
 
-```yaml
-logging:
-  level:
-    # 项目日志 - DEBUG 级别
-    com.liuqitech.codeagent: DEBUG
+```xml
+<!-- logback-spring.xml -->
 
-    # Spring AI 核心日志 - DEBUG 级别
-    org.springframework.ai.chat.client: DEBUG
-    org.springframework.ai.chat.model: DEBUG
-    org.springframework.ai.chat.client.advisor: DEBUG
-    org.springframework.ai.model.function: DEBUG
+<!-- 项目日志 - DEBUG 级别 -->
+<logger name="com.liuqitech.codeagent" level="DEBUG"/>
 
-    # OpenAI API 日志 - DEBUG 级别
-    org.springframework.ai.openai: DEBUG
-    org.springframework.ai.openai.api: DEBUG
+<!-- Spring AI 日志 - INFO 级别 -->
+<logger name="org.springframework.ai" level="INFO"/>
 
-    # HTTP 请求日志 - DEBUG 级别
-    org.springframework.web.client.RestClient: DEBUG
-    org.springframework.http.client: DEBUG
+<!-- 隐藏 Spring AI 重试日志 -->
+<logger name="org.springframework.ai.retry" level="ERROR"/>
+
+<!-- Spring 框架日志 - WARN 级别 -->
+<logger name="org.springframework" level="WARN"/>
+
+<!-- 隐藏 Netty/Reactor 日志 -->
+<logger name="io.netty" level="ERROR"/>
+<logger name="reactor.netty" level="ERROR"/>
+
+<!-- 隐藏 Shell/JLine 日志 -->
+<logger name="org.springframework.shell" level="WARN"/>
+<logger name="org.jline" level="WARN"/>
 ```
+
+> **注意**：日志配置已从 `application.yml` 移至 `logback-spring.xml`，便于更精细的控制（如按 appender 区分输出）。
 
 ### 日志内容包括：
 
@@ -223,12 +238,10 @@ logging:
 ### 问题：日志输出太多
 
 **解决方案**：
-调整日志级别为 INFO：
+在 `logback-spring.xml` 中调整日志级别为 INFO：
 
-```yaml
-logging:
-  level:
-    com.liuqitech.codeagent: INFO
+```xml
+<logger name="com.liuqitech.codeagent" level="INFO"/>
 ```
 
 ### 问题：JSON 格式化不正确

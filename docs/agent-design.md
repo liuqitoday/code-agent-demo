@@ -378,6 +378,40 @@ Agent 的记忆系统用于保存上下文信息，使多轮对话更加连贯�
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+#### 2.7.1 Spring AI ChatMemory 实现
+
+本项目使用 Spring AI 内置的 `MessageWindowChatMemory` 实现对话记忆：
+
+```java
+// AiConfig.java 中配置 ChatMemory Bean
+@Bean
+public ChatMemory chatMemory() {
+    return MessageWindowChatMemory.builder()
+        .maxMessages(20)  // 滑动窗口大小
+        .build();
+}
+
+// CodeAgent.java 中使用 MessageChatMemoryAdvisor
+this.chatClient = chatClientBuilder
+    .defaultSystem(SYSTEM_PROMPT)
+    .defaultTools(codeAgentTools)
+    .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+    .build();
+
+// 调用时传递 conversationId 实现会话隔离
+chatClient.prompt()
+    .user(userRequest)
+    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
+    .call()
+    .chatResponse();
+```
+
+**优势**：
+- 自动管理消息历史，无需手动维护
+- 支持 conversation ID 实现多会话隔离
+- 滑动窗口自动保留最近 N 条消息
+- 符合 Spring AI 最佳实践
+
 ---
 
 ## 3. 系统架构
@@ -447,33 +481,22 @@ Agent 的记忆系统用于保存上下文信息，使多轮对话更加连贯�
 src/main/java/com/liuqitech/codeagent/
 ├── agent/                      # Agent 核心模块
 │   ├── CodeAgent.java          # Agent 主类
-│   ├── AgentConfig.java        # Agent 配置
-│   └── AgentContext.java       # Agent 上下文
-│
-├── prompt/                     # 提示词模块
-│   ├── PromptBuilder.java      # 提示词构建器
-│   ├── PromptTemplate.java     # 提示词模板
-│   └── templates/              # 模板文件目录
+│   └── AgentResponse.java      # Agent 响应封装
 │
 ├── tool/                       # 工具模块
-│   ├── Tool.java               # 工具接口
-│   ├── ToolRegistry.java       # 工具注册中心
-│   ├── CodeGeneratorTool.java  # 代码生成工具
-│   └── FileCreatorTool.java    # 文件创建工具
-│
-├── memory/                     # 记忆模块
-│   ├── Memory.java             # 记忆接口
-│   ├── ConversationMemory.java # 对话记忆
-│   └── MemoryManager.java      # 记忆管理器
+│   └── CodeAgentTools.java     # Agent 工具集（文件操作）
 │
 ├── shell/                      # 命令行模块
-│   ├── AgentCommands.java      # Agent 命令定义
-│   └── ShellConfig.java        # Shell 配置
+│   └── AgentCommands.java      # Agent 命令定义
 │
 └── config/                     # 配置模块
-    ├── AiConfig.java           # AI 配置
-    └── ApplicationConfig.java  # 应用配置
+    ├── AiConfig.java           # AI 配置（ChatMemory、RestClient）
+    ├── AgentProperties.java    # Agent 属性配置
+    └── LoggingInterceptor.java # HTTP 日志拦截器
 ```
+
+> **注意**：记忆模块使用 Spring AI 内置的 `MessageWindowChatMemory`，
+> 通过 `MessageChatMemoryAdvisor` 自动管理对话历史，无需自定义实现。
 
 ---
 
@@ -636,31 +659,60 @@ public class PromptBuilder {
 
 ### 4.5 记忆管理
 
+本项目使用 Spring AI 内置的 `MessageWindowChatMemory`，通过 `MessageChatMemoryAdvisor` 自动管理对话历史。
+
 ```java
 /**
- * 对话记忆
- * 保存会话历史，支持上下文对话
+ * AI 配置类 - 配置 ChatMemory
+ */
+@Configuration
+public class AiConfig {
+
+    @Bean
+    public ChatMemory chatMemory() {
+        return MessageWindowChatMemory.builder()
+            .maxMessages(20)  // 最多保存消息数
+            .build();
+    }
+}
+
+/**
+ * CodeAgent 中使用 ChatMemory
  */
 @Component
-public class ConversationMemory implements Memory {
-    
-    private final List<Message> messageHistory = new ArrayList<>();
-    private final int maxMessages = 20; // 最多保存消息数
-    
-    public void addUserMessage(String content) {
-        // 添加用户消息
+public class CodeAgent {
+
+    private final ChatMemory chatMemory;
+    private String currentConversationId;
+
+    public CodeAgent(ChatMemory chatMemory, ...) {
+        this.chatMemory = chatMemory;
+        this.currentConversationId = generateConversationId();
     }
-    
-    public void addAssistantMessage(String content) {
-        // 添加助手回复
+
+    // 初始化时配置 Advisor
+    @PostConstruct
+    public void init() {
+        this.chatClient = chatClientBuilder
+            .defaultSystem(SYSTEM_PROMPT)
+            .defaultTools(codeAgentTools)
+            .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+            .build();
     }
-    
-    public List<Message> getRecentMessages(int count) {
-        // 获取最近的消息
+
+    // 调用时传递 conversationId
+    public AgentResponse execute(String userRequest) {
+        chatClient.prompt()
+            .user(userRequest)
+            .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, currentConversationId))
+            .call()
+            .chatResponse();
     }
-    
-    public void clear() {
-        // 清空记忆
+
+    // 清空对话历史
+    public void clearMemory() {
+        chatMemory.clear(currentConversationId);
+        currentConversationId = generateConversationId();
     }
 }
 ```
@@ -911,3 +963,4 @@ public interface ToolLoader {
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | v1.0 | 2024-12 | 初始版本，支持基础代码生成 |
+| v1.1 | 2025-02 | 重构为使用 Spring AI ChatMemory，删除自定义记忆实现，支持会话隔离 |
