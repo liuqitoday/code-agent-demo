@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <!-- 日志文件路径 -->
-    <property name="LOG_FILE" value="logs/app.log"/>
+    <property name="LOG_FILE" value="logs/code-agent.log"/>
     <property name="LOG_PATTERN" value="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p --- [%15.15t] %-40.40logger{39} : %m%n"/>
 
     <!-- 控制台输出 - 只输出ERROR级别 -->
@@ -23,28 +23,44 @@
             <charset>UTF-8</charset>
         </encoder>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>logs/app-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+            <fileNamePattern>logs/code-agent-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
             <maxFileSize>10MB</maxFileSize>
             <maxHistory>30</maxHistory>
             <totalSizeCap>1GB</totalSizeCap>
         </rollingPolicy>
     </appender>
 
-    <!-- 项目日志 - DEBUG级别输出到文件 -->
+    <!-- ========== 项目日志 ========== -->
     <logger name="com.liuqitech.codeagent" level="DEBUG" additivity="false">
         <appender-ref ref="FILE"/>
         <appender-ref ref="CONSOLE"/>
     </logger>
 
-    <!-- Spring AI 日志 - INFO级别输出到文件 -->
+    <!-- ========== Spring AI 日志 ========== -->
     <logger name="org.springframework.ai" level="INFO" additivity="false">
         <appender-ref ref="FILE"/>
     </logger>
+    <!-- 隐藏 Spring AI 重试机制的 WARN 日志（避免大量堆栈信息） -->
+    <logger name="org.springframework.ai.retry" level="ERROR" additivity="false">
+        <appender-ref ref="FILE"/>
+    </logger>
 
-    <!-- Spring 框架日志 - WARN级别 -->
+    <!-- ========== 隐藏不必要的框架日志 ========== -->
     <logger name="org.springframework" level="WARN" additivity="false">
         <appender-ref ref="FILE"/>
         <appender-ref ref="CONSOLE"/>
+    </logger>
+    <logger name="org.springframework.shell" level="WARN" additivity="false">
+        <appender-ref ref="FILE"/>
+    </logger>
+    <logger name="org.jline" level="WARN" additivity="false">
+        <appender-ref ref="FILE"/>
+    </logger>
+    <logger name="io.netty" level="ERROR" additivity="false">
+        <appender-ref ref="FILE"/>
+    </logger>
+    <logger name="reactor.netty" level="ERROR" additivity="false">
+        <appender-ref ref="FILE"/>
     </logger>
 
     <!-- 根日志配置 -->

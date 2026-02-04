@@ -2,6 +2,8 @@ package com.liuqitech.codeagent.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.context.annotation.Bean;
@@ -13,17 +15,38 @@ import java.time.Duration;
 
 /**
  * AI 配置类
- * 配置 Spring AI 使用的 RestClient 的超时设置
+ * 配置 Spring AI 的 ChatMemory 和 RestClient
  *
  * 说明：
- * 1. Spring AI 1.1.x 不支持在 application.yml 中直接配置超时
- * 2. 通过提供自定义的 RestClient.Builder Bean，Spring AI 会自动使用它
- * 3. 这种方式只影响 Spring AI 的 HTTP 客户端，不影响其他 RestClient
+ * 1. ChatMemory 用于管理对话历史，使用 MessageWindowChatMemory 实现
+ * 2. RestClient.Builder 配置超时和日志拦截器
  */
 @Configuration
 public class AiConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AiConfig.class);
+
+    private final AgentProperties agentProperties;
+
+    public AiConfig(AgentProperties agentProperties) {
+        this.agentProperties = agentProperties;
+    }
+
+    /**
+     * 配置 ChatMemory Bean
+     * 使用 MessageWindowChatMemory 实现滑动窗口式的消息历史管理
+     *
+     * @return ChatMemory 实例
+     */
+    @Bean
+    public ChatMemory chatMemory() {
+        int maxMessages = agentProperties.getMaxHistory();
+        log.info("配置 ChatMemory: 使用 MessageWindowChatMemory, 最大消息数={}", maxMessages);
+
+        return MessageWindowChatMemory.builder()
+            .maxMessages(maxMessages)
+            .build();
+    }
 
     /**
      * 为 Spring AI 提供自定义的 RestClient.Builder

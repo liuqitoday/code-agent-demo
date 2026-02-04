@@ -13,6 +13,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -27,15 +28,14 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingInterceptor.class);
 
-    // 用于跟踪当前是第几轮对话
-    private static int roundCounter = 0;
+    // 用于跟踪当前是第几轮对话（线程安全）
+    private static final AtomicInteger roundCounter = new AtomicInteger(0);
 
     @Override
     public ClientHttpResponse intercept(HttpRequest request, byte[] body,
                                        ClientHttpRequestExecution execution) throws IOException {
 
-        roundCounter++;
-        int currentRound = roundCounter;
+        int currentRound = roundCounter.incrementAndGet();
 
         // ========== 记录请求 ==========
         String requestBody = new String(body, StandardCharsets.UTF_8);
@@ -62,7 +62,7 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
      * 重置轮次计数器（在新的用户请求开始时调用）
      */
     public static void resetRoundCounter() {
-        roundCounter = 0;
+        roundCounter.set(0);
     }
 
     // ==================== 控制台输出（用户可见）====================

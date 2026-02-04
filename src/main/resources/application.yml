@@ -16,6 +16,13 @@ spring:
           model: ${OPENAI_MODEL:}
           temperature: 0.7
 
+  # Spring Shell 配置
+  shell:
+    interactive:
+      enabled: true
+    script:
+      enabled: true
+
 # Agent 配置
 agent:
   # 工作空间目录，生成的代码将保存在这里
@@ -24,33 +31,9 @@ agent:
   max-history: 20
   # 默认编程语言
   default-language: java
-  # 使用的模型
+  # 使用的模型（用于显示配置信息，与 spring.ai.openai.chat.options.model 保持一致）
   model: ${OPENAI_MODEL:}
-  # 温度参数
+  # 温度参数（用于显示配置信息）
   temperature: 0.7
 
-# Spring Shell 配置
-spring.shell:
-  interactive:
-    enabled: true
-  script:
-    enabled: true
-
-# 日志配置 - 详细日志记录到文件，控制台只显示关键信息
-logging:
-  level:
-    # ========== 项目日志 ==========
-    # 项目日志：DEBUG 级别，记录到文件
-    com.liuqitech.codeagent: DEBUG
-
-    # ========== 隐藏不必要的日志 ==========
-    # 隐藏 Spring AI 重试机制的 WARN 日志（避免大量堆栈信息）
-    org.springframework.ai.retry: ERROR
-    # 隐藏 Netty 超时异常的详细日志
-    io.netty: ERROR
-    reactor.netty: ERROR
-    # 隐藏 Spring Shell 的冗余日志
-    org.springframework.shell: WARN
-    org.jline: WARN
-    # 隐藏 Spring 框架日志
-    org.springframework: WARN
+# 日志配置统一在 logback-spring.xml 中管理
