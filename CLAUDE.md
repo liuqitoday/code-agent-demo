@@ -50,10 +50,12 @@ User Input → AgentCommands (Shell) → CodeAgent → ChatClient (Spring AI) �
 ```
 
 **Key modules:**
-- `agent/` - Core orchestration: `CodeAgent` coordinates LLM + tools using Spring AI ChatClient
+- `agent/` - Core orchestration: `CodeAgent` coordinates LLM + tools using Spring AI ChatClient, `AgentResponse` wraps results
 - `tool/` - `CodeAgentTools` exposes file operations via `@Tool` annotations (createFile, readFile, editFile, editFileAll, listDirectory, createDirectory)
 - `shell/` - `AgentCommands` defines CLI commands (agent, ask, clear, config, guide)
-- `config/` - `AiConfig` configures ChatMemory and RestClient, `LoggingInterceptor` traces HTTP
+- `config/` - `AiConfig` configures ChatMemory/RestClient/Retry, `LoggingInterceptor` traces HTTP with round-based console output, `LlmRetryListener` logs retry events
+- `service/` - `LlmService` encapsulates LLM calls with Spring Retry support
+- `util/` - `ErrorMessages` maps error types to user-friendly messages
 
 **Conversation memory:**
 - Uses Spring AI's `MessageWindowChatMemory` (sliding window, max 20 messages)

@@ -5,10 +5,12 @@
 ## 功能特性
 
 - **自然语言驱动**：通过自然语言描述生成代码
-- **Tool Calling**：支持 LLM 工具调用，自动创建文件
-- **文件操作**：创建、读取文件和目录
+- **Tool Calling**：支持 LLM 工具调用，自动创建和编辑文件
+- **文件操作**：创建、读取、编辑文件和目录
 - **对话记忆**：使用 Spring AI ChatMemory 支持多轮对话上下文
 - **会话隔离**：支持 conversation ID 实现多会话隔离
+- **双模式交互**：Agent 模式（工具调用）和 Ask 模式（流式问答）
+- **自动重试**：LLM 调用失败时自动重试，指数退避
 - **交互式命令行**：基于 Spring Shell 的友好交互界面
 
 ## 技术栈
@@ -47,14 +49,13 @@ mvn spring-boot:run
 启动后进入交互式命令行，可以使用以下命令：
 
 ```bash
-# 生成代码并保存到文件
-shell:> generate "创建一个 Java 的 UserService 类，包含登录和注册方法"
+# Agent 模式：支持工具调用，可创建/编辑/读取文件
+shell:> agent "创建一个 Java 的 UserService 类，包含登录和注册方法"
+shell:> a "写一个 Python 快速排序算法" -f python-demo
 
-# 只展示代码不保存
-shell:> generate -s false "写一个 Python 快速排序算法"
-
-# 问答对话
+# 问答模式：流式输出，纯对话
 shell:> ask "如何在 Java 中实现单例模式？"
+shell:> q "解释一下依赖注入的原理"
 
 # 查看使用帮助
 shell:> guide
@@ -75,18 +76,25 @@ shell:> exit
 src/main/java/com/liuqitech/codeagent/
 ├── agent/                      # Agent 核心模块
 │   ├── CodeAgent.java          # Agent 主类（核心逻辑）
-│   └── AgentResponse.java      # Agent 响应封装
+│   └── AgentResponse.java      # Agent 响应封装（不可变）
 │
 ├── tool/                       # 工具模块
 │   └── CodeAgentTools.java     # Agent 工具集（文件操作）
 │
 ├── shell/                      # 命令行模块
-│   └── AgentCommands.java      # Shell 命令定义
+│   └── AgentCommands.java      # Shell 命令定义（agent, ask, clear, config, guide）
 │
 ├── config/                     # 配置模块
-│   ├── AiConfig.java           # AI 配置（ChatMemory、RestClient）
+│   ├── AiConfig.java           # AI 配置（ChatMemory、RestClient、Retry）
 │   ├── AgentProperties.java    # Agent 属性配置
-│   └── LoggingInterceptor.java # HTTP 日志拦截器
+│   ├── LoggingInterceptor.java # HTTP 日志拦截器（Round-based 控制台输出）
+│   └── LlmRetryListener.java  # LLM 重试事件监听器
+│
+├── service/                    # 服务模块
+│   └── LlmService.java        # LLM 调用封装（含重试逻辑）
+│
+├── util/                       # 工具模块
+│   └── ErrorMessages.java      # 用户友好错误消息
 │
 └── CodeAgentApplication.java   # 应用入口
 ```
@@ -146,7 +154,7 @@ LLM 在理解用户请求后，会自动决定是否需要调用这些工具。
 生成一个简单的 REST Controller：
 
 ```
-shell:> generate "创建一个 Spring Boot 的 UserController，提供用户的增删改查 REST API"
+shell:> agent "创建一个 Spring Boot 的 UserController，提供用户的增删改查 REST API"
 ```
 
 Agent 会：

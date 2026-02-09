@@ -28,16 +28,15 @@
 
 ### 1.3 功能范围
 
-**当前版本（v1.0）支持**：
+**当前版本支持**：
 - 通过自然语言描述生成新代码
+- 对已有代码的精确编辑（搜索替换）和批量替换
 - 支持多种编程语言（Java、Python、JavaScript 等）
+- 多轮对话上下文（滑动窗口记忆）
+- 双模式交互：Agent 模式（工具调用）和 Ask 模式（流式问答）
+- LLM 调用自动重试（指数退避）
 - 命令行交互界面
 - 代码文件保存
-
-**暂不支持**：
-- 对已有代码的修改
-- 代码上下文理解
-- 多轮对话优化
 
 ---
 
@@ -392,10 +391,21 @@ public ChatMemory chatMemory() {
 }
 
 // CodeAgent.java 中使用 MessageChatMemoryAdvisor
+// 使用双 ChatClient 架构：chatClient (带工具) + streamClient (不带工具)
+MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
+
+// Agent 模式客户端：注册工具，支持 tool calling
 this.chatClient = chatClientBuilder
     .defaultSystem(SYSTEM_PROMPT)
     .defaultTools(codeAgentTools)
-    .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+    .defaultAdvisors(memoryAdvisor)
+    .build();
+
+// Ask 模式客户端：不注册工具，避免 Spring AI stream + tool calling 的已知问题
+// 参考: https://github.com/spring-projects/spring-ai/issues/5167
+this.streamClient = chatClientBuilder
+    .defaultSystem(SYSTEM_PROMPT)
+    .defaultAdvisors(memoryAdvisor)
     .build();
 
 // 调用时传递 conversationId 实现会话隔离
@@ -487,16 +497,26 @@ src/main/java/com/liuqitech/codeagent/
 │   └── CodeAgentTools.java     # Agent 工具集（文件操作）
 │
 ├── shell/                      # 命令行模块
-│   └── AgentCommands.java      # Agent 命令定义
+│   └── AgentCommands.java      # Agent 命令定义（agent, ask）
 │
-└── config/                     # 配置模块
-    ├── AiConfig.java           # AI 配置（ChatMemory、RestClient）
-    ├── AgentProperties.java    # Agent 属性配置
-    └── LoggingInterceptor.java # HTTP 日志拦截器
+├── service/                    # 服务模块
+│   └── LlmService.java        # LLM 调用封装（含重试逻辑）
+│
+├── config/                     # 配置模块
+│   ├── AiConfig.java           # AI 配置（ChatMemory、RestClient、Retry）
+│   ├── AgentProperties.java    # Agent 属性配置
+│   ├── LoggingInterceptor.java # HTTP 日志拦截器
+│   └── LlmRetryListener.java  # LLM 重试事件监听器
+│
+├── util/                       # 工具模块
+│   └── ErrorMessages.java      # 用户友好错误消息
+│
+└── CodeAgentApplication.java   # 应用入口
 ```
 
 > **注意**：记忆模块使用 Spring AI 内置的 `MessageWindowChatMemory`，
 > 通过 `MessageChatMemoryAdvisor` 自动管理对话历史，无需自定义实现。
+> LLM 调用通过 `LlmService` 封装，支持 Spring Retry 自动重试。
 
 ---
 
@@ -851,22 +871,26 @@ public class CodeAgentTools {
 ```java
 @ShellComponent
 public class AgentCommands {
-    
+
     private final CodeAgent codeAgent;
-    
-    @ShellMethod(value = "生成代码", key = "generate")
-    public String generate(
-        @ShellOption(help = "代码描述") String description
+
+    @ShellMethod(value = "Agent 模式：支持工具调用", key = {"agent", "ag", "a"})
+    public void agent(
+        @ShellOption(help = "任务描述") String description
     ) {
-        return codeAgent.execute(description).getOutput();
+        AgentResponse response = codeAgent.execute(description);
+        printResponse(response);
     }
-    
-    @ShellMethod(value = "开始交互式对话", key = "chat")
-    public void chat() {
-        // 进入交互式对话模式
+
+    @ShellMethod(value = "问答模式：流式输出", key = {"ask", "q"})
+    public void ask(
+        @ShellOption(help = "你的问题") String question
+    ) {
+        // 使用 streamClient（无工具）进行流式响应
+        codeAgent.executeStream(question)...;
     }
-    
-    @ShellMethod(value = "清空对话历史", key = "clear")
+
+    @ShellMethod(value = "清空对话历史", key = {"clear", "c"})
     public String clear() {
         codeAgent.clearMemory();
         return "对话历史已清空";
@@ -964,3 +988,4 @@ public interface ToolLoader {
 |------|------|------|
 | v1.0 | 2024-12 | 初始版本，支持基础代码生成 |
 | v1.1 | 2025-02 | 重构为使用 Spring AI ChatMemory，删除自定义记忆实现，支持会话隔离 |
+| v1.2 | 2026-02 | 引入 LlmService 重试机制，合并命令为 agent/ask 双模式，支持文件编辑，修复 Spring AI 兼容性问题 |
