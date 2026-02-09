@@ -51,8 +51,8 @@ User Input → AgentCommands (Shell) → CodeAgent → ChatClient (Spring AI) �
 
 **Key modules:**
 - `agent/` - Core orchestration: `CodeAgent` coordinates LLM + tools using Spring AI ChatClient
-- `tool/` - `CodeAgentTools` exposes file operations via `@Tool` annotations (createFile, readFile, listDirectory, createDirectory)
-- `shell/` - `AgentCommands` defines CLI commands (generate, ask, query, clear, config, guide)
+- `tool/` - `CodeAgentTools` exposes file operations via `@Tool` annotations (createFile, readFile, editFile, editFileAll, listDirectory, createDirectory)
+- `shell/` - `AgentCommands` defines CLI commands (agent, ask, clear, config, guide)
 - `config/` - `AiConfig` configures ChatMemory and RestClient, `LoggingInterceptor` traces HTTP
 
 **Conversation memory:**
@@ -61,14 +61,13 @@ User Input → AgentCommands (Shell) → CodeAgent → ChatClient (Spring AI) �
 - Supports conversation ID for session isolation
 
 **Execution modes:**
-- Blocking mode (`generate`, `query`): Required for tool calling to work correctly
-- Streaming mode (`ask`): For text-only responses, falls back to blocking on failure
+- Agent mode (`agent`): Blocking, with tool calling — uses `chatClient` with registered tools
+- Ask mode (`ask`): Streaming, no tools — uses separate `streamClient` to avoid Spring AI stream + tool calling bug ([#5167](https://github.com/spring-projects/spring-ai/issues/5167)), falls back to blocking on failure
 
 ## Shell Commands
 
-- `generate`/`gen`/`g "prompt"` - Generate code with tool calling (files saved to workspace)
-- `ask`/`a "question"` - Q&A with streaming
-- `query`/`q "question"` - Q&A without streaming (more stable)
+- `agent`/`ag`/`a "prompt"` - Agent mode: tool calling enabled, can create/edit/read files (supports `-f folder`)
+- `ask`/`q "question"` - Ask mode: streaming Q&A, no tool calling
 - `clear`/`c` - Clear conversation history and start new session
 - `config`/`cfg` - Show current configuration (includes session ID)
 - `guide` - Usage help
@@ -76,8 +75,8 @@ User Input → AgentCommands (Shell) → CodeAgent → ChatClient (Spring AI) �
 ## Key Implementation Details
 
 - Spring AI handles the ReAct loop automatically via `@Tool`-annotated methods
-- Tool calling only works in blocking mode (stream mode has null toolName issues)
-- Retry logic: 3 attempts with exponential backoff (2s, 4s, 6s) for timeouts
+- Tool calling only works in blocking mode (agent command); streaming mode (ask command) uses a separate ChatClient without tools
+- Retry logic: 3 retries with exponential backoff (2s, 4s, 8s, max 10s) via Spring Retry
 - Path validation in tools prevents directory traversal outside workspace
 - Logs written to `logs/code-agent.log` (DEBUG level for project code)
 - Each session has a unique conversation ID (e.g., `session-a1b2c3d4`)
