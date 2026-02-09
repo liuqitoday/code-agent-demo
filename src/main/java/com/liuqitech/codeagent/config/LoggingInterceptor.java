@@ -104,6 +104,7 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
             // 工具结果
             String toolResult = findLastContentByRole(messages, "tool");
             if (toolResult != null && !toolResult.isEmpty()) {
+                toolResult = unescapeJsonString(toolResult);
                 sb.append("│ \n");
                 sb.append("│ 🔧 工具执行结果:\n");
                 appendMultilineContent(sb, toolResult, 300);
@@ -209,6 +210,22 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
     }
 
     // ==================== Jackson JSON 解析方法 ====================
+
+    /**
+     * 反转义 JSON 字符串编码，处理工具返回内容中的字面量转义字符
+     * 例如将字面量 \n 转为真实换行，并去除首尾包裹的引号
+     */
+    private String unescapeJsonString(String content) {
+        if (content == null) return null;
+        // 去除首尾引号（双重 JSON 编码时会出现）
+        if (content.length() >= 2 && content.startsWith("\"") && content.endsWith("\"")) {
+            content = content.substring(1, content.length() - 1);
+        }
+        return content
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\\"", "\"");
+    }
 
     private JsonNode parseJson(String json) {
         try {
