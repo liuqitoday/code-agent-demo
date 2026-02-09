@@ -101,13 +101,29 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
                 appendMultilineContent(sb, userMessage, 500);
             }
 
-            // 工具结果
-            String toolResult = findLastContentByRole(messages, "tool");
-            if (toolResult != null && !toolResult.isEmpty()) {
-                toolResult = unescapeJsonString(toolResult);
+            // 工具结果（可能有多条，如并行工具调用）
+            List<String> toolResults = findAllRecentContentByRole(messages, "tool");
+            if (!toolResults.isEmpty()) {
                 sb.append("│ \n");
-                sb.append("│ 🔧 工具执行结果:\n");
-                appendMultilineContent(sb, toolResult, 300);
+                sb.append("│ 🔧 工具执行结果");
+                if (toolResults.size() > 1) {
+                    sb.append(" (").append(toolResults.size()).append(" 个)");
+                }
+                sb.append(":\n");
+                for (int i = 0; i < toolResults.size(); i++) {
+                    String result = unescapeJsonString(toolResults.get(i));
+                    if (toolResults.size() > 1) {
+                        sb.append("│    [").append(i + 1).append("] ");
+                        // 首行内容紧跟序号，后续行正常缩进
+                        String[] lines = result.split("\n", 2);
+                        sb.append(lines[0].length() > 60 ? lines[0].substring(0, 60) + "..." : lines[0]).append("\n");
+                        if (lines.length > 1 && !lines[1].isBlank()) {
+                            appendMultilineContent(sb, lines[1], 200);
+                        }
+                    } else {
+                        appendMultilineContent(sb, result, 300);
+                    }
+                }
             }
         }
 
@@ -251,6 +267,29 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
             }
         }
         return result;
+    }
+
+    /**
+     * 提取 messages 数组末尾所有连续的指定角色消息的 content
+     * 用于处理并行工具调用场景（多条 tool 消息连续出现）
+     */
+    private List<String> findAllRecentContentByRole(JsonNode messages, String role) {
+        List<String> results = new ArrayList<>();
+        // 从末尾向前扫描，收集连续的同角色消息
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            JsonNode msg = messages.get(i);
+            JsonNode roleNode = msg.get("role");
+            if (roleNode != null && role.equals(roleNode.asText())) {
+                JsonNode contentNode = msg.get("content");
+                if (contentNode != null && !contentNode.isNull()) {
+                    results.add(0, contentNode.asText());
+                }
+            } else {
+                // 遇到非目标角色的消息就停止
+                if (!results.isEmpty()) break;
+            }
+        }
+        return results;
     }
 
     /**
