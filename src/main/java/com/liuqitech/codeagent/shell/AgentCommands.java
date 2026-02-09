@@ -100,7 +100,7 @@ public class AgentCommands {
             writer.println("\n[切换模式] 流式输出异常，切换到标准模式...\n");
             writer.flush();
 
-            AgentResponse response = codeAgent.execute(question);
+            AgentResponse response = codeAgent.executeWithoutTools(question);
             printResponse(response, writer);
         }
     }

@@ -161,6 +161,52 @@ public class CodeAgent {
             .doOnError(error -> log.error("[流式请求] 出错: {}", error.getMessage()));
     }
 
+    /**
+     * 执行用户请求（阻塞模式，不带工具）
+     * 用于 ask 模式的 fallback，确保不会触发文件操作
+     *
+     * @param userRequest 用户的自然语言请求
+     * @return 携带完整数据的 AgentResponse
+     */
+    public AgentResponse executeWithoutTools(String userRequest) {
+        log.info("[请求-无工具] 会话={}, 输入={}", currentConversationId,
+                userRequest.substring(0, Math.min(50, userRequest.length())));
+
+        long startTime = System.currentTimeMillis();
+
+        try {
+            org.springframework.ai.chat.model.ChatResponse chatResponse =
+                llmService.call(streamClient, userRequest, currentConversationId);
+
+            long duration = System.currentTimeMillis() - startTime;
+
+            if (chatResponse == null || chatResponse.getResult() == null
+                    || chatResponse.getResult().getOutput() == null) {
+                log.warn("[完成] 耗时={}ms, LLM 返回了空响应", duration);
+                return AgentResponse.success("(模型未返回内容)", null, duration);
+            }
+
+            String response = chatResponse.getResult().getOutput().getText();
+            String reasoningContent = extractReasoningContent(chatResponse);
+
+            log.info("[完成] 耗时={}ms, 响应长度={}", duration, response != null ? response.length() : 0);
+            return AgentResponse.success(response, reasoningContent, duration);
+
+        } catch (LlmService.LlmCallFailedException e) {
+            long duration = System.currentTimeMillis() - startTime;
+            log.error("[错误] LLM 调用失败（已重试）, 耗时={}ms", duration, e);
+            String userMessage = ErrorMessages.buildUserFriendlyMessage(e.getErrorType(), e.getMessage());
+            return AgentResponse.error(userMessage);
+
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            log.error("[错误] 执行请求失败, 耗时={}ms", duration, e);
+            LlmService.ErrorType type = LlmService.classifyException(e);
+            String original = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return AgentResponse.error(ErrorMessages.buildUserFriendlyMessage(type, original));
+        }
+    }
+
     public void clearMemory() {
         chatMemory.clear(currentConversationId);
         String oldId = currentConversationId;
