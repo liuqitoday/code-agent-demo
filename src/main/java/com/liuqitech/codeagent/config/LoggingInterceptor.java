@@ -31,9 +31,17 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
 
     /**
      * 基于线程的轮次计数器，每个线程（即每次用户请求）独立计数
+     * 每次新的用户请求开始前应调用 {@link #resetRoundCounter()} 重置
      */
     private static final ThreadLocal<AtomicInteger> roundCounter =
             ThreadLocal.withInitial(() -> new AtomicInteger(0));
+
+    /**
+     * 重置当前线程的轮次计数器，应在每次新的用户请求开始时调用
+     */
+    public static void resetRoundCounter() {
+        roundCounter.get().set(0);
+    }
 
     @Override
     public ClientHttpResponse intercept(HttpRequest request, byte[] body,

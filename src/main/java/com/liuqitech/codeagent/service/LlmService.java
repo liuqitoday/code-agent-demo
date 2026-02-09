@@ -1,5 +1,6 @@
 package com.liuqitech.codeagent.service;
 
+import com.liuqitech.codeagent.config.LoggingInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -49,6 +50,7 @@ public class LlmService {
         backoff = @Backoff(delay = 2000, multiplier = 2, maxDelay = 10000)
     )
     public ChatResponse call(ChatClient chatClient, String userRequest, String conversationId) {
+        LoggingInterceptor.resetRoundCounter();
         try {
             return chatClient.prompt()
                 .user(userRequest)
@@ -76,6 +78,7 @@ public class LlmService {
      * @return 流式响应
      */
     public Flux<String> stream(ChatClient chatClient, String userRequest, String conversationId) {
+        LoggingInterceptor.resetRoundCounter();
         return chatClient.prompt()
             .user(userRequest)
             .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))

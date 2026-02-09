@@ -1,12 +1,10 @@
 package com.liuqitech.codeagent.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
 
 /**
  * Agent 配置属性
  */
-@Component
 @ConfigurationProperties(prefix = "agent")
 public class AgentProperties {
     

@@ -57,6 +57,7 @@ public class CodeAgent {
     private final LlmService llmService;
 
     private ChatClient chatClient;
+    private ChatClient streamClient;
     private String currentConversationId;
 
     public CodeAgent(ChatClient.Builder chatClientBuilder,
@@ -76,10 +77,20 @@ public class CodeAgent {
         this.currentConversationId = generateConversationId();
         log.info("[Agent 初始化] 工作空间: {}, 会话 ID: {}", agentProperties.getWorkspace(), currentConversationId);
 
+        MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
+
+        // 阻塞模式客户端：注册工具，支持 tool calling
         this.chatClient = chatClientBuilder
             .defaultSystem(SYSTEM_PROMPT)
             .defaultTools(codeAgentTools)
-            .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+            .defaultAdvisors(memoryAdvisor)
+            .build();
+
+        // 流式模式客户端：不注册工具，避免 Spring AI stream + tool calling 的已知问题
+        // 参考: https://github.com/spring-projects/spring-ai/issues/5167
+        this.streamClient = chatClientBuilder
+            .defaultSystem(SYSTEM_PROMPT)
+            .defaultAdvisors(memoryAdvisor)
             .build();
 
         log.info("[Agent 初始化] 完成");
@@ -102,6 +113,13 @@ public class CodeAgent {
                 llmService.call(chatClient, userRequest, currentConversationId);
 
             long duration = System.currentTimeMillis() - startTime;
+
+            if (chatResponse == null || chatResponse.getResult() == null
+                    || chatResponse.getResult().getOutput() == null) {
+                log.warn("[完成] 耗时={}ms, LLM 返回了空响应", duration);
+                return AgentResponse.success("(模型未返回内容)", null, duration);
+            }
+
             String response = chatResponse.getResult().getOutput().getText();
             String reasoningContent = extractReasoningContent(chatResponse);
 
@@ -130,6 +148,7 @@ public class CodeAgent {
 
     /**
      * 流式执行用户请求
+     * 使用不注册工具的 streamClient，避免 Spring AI stream 模式下 tool calling 的已知问题
      *
      * @param userRequest 用户的自然语言请求
      * @return 流式响应
@@ -137,7 +156,7 @@ public class CodeAgent {
     public reactor.core.publisher.Flux<String> executeStream(String userRequest) {
         log.info("[流式请求] 会话={}, 输入={}", currentConversationId, userRequest);
 
-        return llmService.stream(chatClient, userRequest, currentConversationId)
+        return llmService.stream(streamClient, userRequest, currentConversationId)
             .doOnComplete(() -> log.info("[流式请求] 响应完成"))
             .doOnError(error -> log.error("[流式请求] 出错: {}", error.getMessage()));
     }
@@ -161,6 +180,13 @@ public class CodeAgent {
         return "session-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
+    /**
+     * 从 ChatResponse 中提取思考过程内容
+     *
+     * 注意：reasoning_content 是部分模型的扩展字段，并非 OpenAI 标准 API 的一部分。
+     * 支持的模型包括 DeepSeek（reasoning_content）、QwQ 等推理模型。
+     * 标准 OpenAI GPT 系列模型不会返回此字段，此方法会安全地返回 null。
+     */
     private String extractReasoningContent(org.springframework.ai.chat.model.ChatResponse chatResponse) {
         var output = chatResponse.getResult().getOutput();
         var metadata = output.getMetadata();
