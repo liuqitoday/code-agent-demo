@@ -27,62 +27,56 @@ public class AgentCommands {
         this.terminal = terminal;
     }
 
-    @ShellMethod(value = "根据描述生成代码", key = {"generate", "gen", "g"})
-    public void generate(
+    @ShellMethod(value = "Agent 模式：支持工具调用，可创建/编辑/读取文件", key = {"agent", "ag", "a"})
+    public void agent(
             @ShellOption(
                 value = {"-d", "--description"},
-                help = "代码需求描述",
+                help = "任务描述或问题",
                 defaultValue = ShellOption.NULL
             ) String description,
             @ShellOption(
                 value = {"-f", "--folder"},
                 help = "指定子文件夹（相对于工作空间），不存在会自动创建",
                 defaultValue = ""
-            ) String folder,
-            @ShellOption(
-                value = {"-s", "--save"},
-                help = "是否保存到文件",
-                defaultValue = "true"
-            ) boolean save
+            ) String folder
     ) {
         PrintWriter writer = terminal.writer();
 
         if (description == null || description.isBlank()) {
-            writer.println("[提示] 请提供代码描述，例如: generate \"创建一个 Java 的用户服务类\"");
-            writer.println("   可选参数: -f test (在 workspace/test 目录下创建)");
+            writer.println("[提示] 请提供任务描述，例如:");
+            writer.println("   agent \"创建一个 Java 的用户服务类\"");
+            writer.println("   a \"读取并优化 index.html\"");
+            writer.println("   可选参数: -f test (在 workspace/test 目录下操作)");
             writer.flush();
             return;
         }
 
         StringBuilder promptBuilder = new StringBuilder(description);
 
-        if (save) {
-            promptBuilder.append("\n\n请将代码保存到文件。");
-            if (folder != null && !folder.isBlank()) {
-                promptBuilder.append("目标目录: ").append(folder);
-                writer.println("\n[目标文件夹]: " + folder);
-            }
-        } else {
-            promptBuilder.append("\n\n只展示代码，不要保存文件。");
+        if (folder != null && !folder.isBlank()) {
+            promptBuilder.append("\n\n目标目录: ").append(folder);
+            writer.println("\n[目标文件夹]: " + folder);
         }
 
         String prompt = promptBuilder.toString();
 
-        writer.println("\n[处理中] 正在生成代码，请稍候...\n");
+        writer.println("\n[处理中] Agent 正在工作，请稍候...\n");
         writer.flush();
 
         AgentResponse response = codeAgent.execute(prompt);
         printResponse(response, writer);
     }
 
-    @ShellMethod(value = "向 Agent 提问（流式输出）", key = {"ask", "a"})
+    @ShellMethod(value = "问答模式：流式输出，纯对话不调用工具", key = {"ask", "q"})
     public void ask(
-            @ShellOption(help = "你的问题或请求") String question
+            @ShellOption(help = "你的问题") String question
     ) {
         PrintWriter writer = terminal.writer();
 
         if (question == null || question.isBlank()) {
-            writer.println("[提示] 请输入你的问题");
+            writer.println("[提示] 请输入你的问题，例如:");
+            writer.println("   ask \"如何在 Java 中实现单例模式？\"");
+            writer.println("   q \"解释一下依赖注入的原理\"");
             writer.flush();
             return;
         }
@@ -103,31 +97,12 @@ public class AgentCommands {
                 .blockLast();
 
         } catch (Exception e) {
-            writer.println("\n[切换模式] 切换到标准模式...\n");
+            writer.println("\n[切换模式] 流式输出异常，切换到标准模式...\n");
             writer.flush();
 
             AgentResponse response = codeAgent.execute(question);
             printResponse(response, writer);
         }
-    }
-
-    @ShellMethod(value = "向 Agent 提问（稳定模式）", key = {"query", "q"})
-    public void query(
-            @ShellOption(help = "你的问题或请求") String question
-    ) {
-        PrintWriter writer = terminal.writer();
-
-        if (question == null || question.isBlank()) {
-            writer.println("[提示] 请输入你的问题");
-            writer.flush();
-            return;
-        }
-
-        writer.println("\n[处理中] 正在处理...\n");
-        writer.flush();
-
-        AgentResponse response = codeAgent.execute(question);
-        printResponse(response, writer);
     }
 
     @ShellMethod(value = "清空对话历史", key = {"clear", "c"})
@@ -157,22 +132,15 @@ public class AgentCommands {
             Code Agent 使用指南
             ═══════════════════════════════════════════════════════════════
 
-            [代码生成] (会调用工具创建文件):
-               generate "创建一个 Java 的 UserService 类，包含登录和注册方法"
-               gen "写一个 Python 爬虫" -f python-demo
-               g "创建 React 组件" --folder frontend/components
+            [Agent 模式] (支持工具调用，可操作文件):
+               agent "创建一个 Java 的 UserService 类，包含登录和注册方法"
+               ag "读取 index.html 并优化性能"
+               a "写一个 Python 爬虫" -f python-demo
+               a "创建 React 组件" --folder frontend/components
 
-               [指定子文件夹]:
-               generate "创建测试类" -f test        → workspace/test/下创建
-               generate "创建工具类" -f utils/common → workspace/utils/common/下创建
-
-            [问答对话] (流式输出):
+            [问答模式] (流式输出，纯对话):
                ask "如何在 Java 中实现线程安全的单例模式？"
-               a "解释一下依赖注入的原理"
-
-            [稳定查询] (阻塞模式，更稳定):
-               query "帮我分析这段代码的问题"
-               q "给我一个简单的例子"
+               q "解释一下依赖注入的原理"
 
             [其他命令]:
                clear  - 清空对话历史（开始新会话）
@@ -181,9 +149,9 @@ public class AgentCommands {
                exit   - 退出程序
 
             [提示]:
-               - generate 命令支持 -f 参数指定目标子文件夹
+               - agent 命令支持 -f 参数指定目标子文件夹
                - 文件夹不存在会自动创建
-               - 如果遇到超时，尝试用 query 代替 ask
+               - 需要操作文件时用 agent，纯提问用 ask
             ═══════════════════════════════════════════════════════════════
             """;
     }
