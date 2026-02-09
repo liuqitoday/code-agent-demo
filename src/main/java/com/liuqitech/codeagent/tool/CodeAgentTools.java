@@ -1,5 +1,6 @@
 package com.liuqitech.codeagent.tool;
 
+import com.liuqitech.codeagent.config.AgentProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
@@ -15,215 +16,145 @@ import java.nio.file.Paths;
  * Agent 工具集合
  * 包含代码生成和文件操作相关的工具
  * 这些工具通过 Spring AI 的 @Tool 注解暴露给 LLM 调用
- *
- * 当 LLM 决定调用工具时，Spring AI 会自动执行对应方法
  */
 @Component
 public class CodeAgentTools {
 
     private static final Logger log = LoggerFactory.getLogger(CodeAgentTools.class);
 
-    /**
-     * 工作空间根目录
-     */
-    private String workspaceRoot = "./workspace";
+    private final String workspaceRoot;
+    private final Path workspaceRootPath;
 
-    /**
-     * 缓存的工作空间根路径（normalized）
-     */
-    private Path workspaceRootPath;
-
-    public CodeAgentTools() {
-        this.workspaceRootPath = Paths.get(workspaceRoot).normalize();
-    }
-
-    public void setWorkspaceRoot(String workspaceRoot) {
-        this.workspaceRoot = workspaceRoot;
+    public CodeAgentTools(AgentProperties agentProperties) {
+        this.workspaceRoot = agentProperties.getWorkspace();
         this.workspaceRootPath = Paths.get(workspaceRoot).normalize();
     }
 
     // ==================== 路径验证工具方法 ====================
 
-    /**
-     * 解析相对路径为完整路径并进行规范化
-     *
-     * @param relativePath 相对于工作空间的路径
-     * @return 规范化后的完整路径
-     */
     private Path resolvePath(String relativePath) {
         return Paths.get(workspaceRoot, relativePath).normalize();
     }
 
-    /**
-     * 检查路径是否在工作空间内（防止目录遍历攻击）
-     *
-     * @param path 要检查的路径
-     * @return 如果路径在工作空间内返回 true
-     */
     private boolean isPathInsideWorkspace(Path path) {
         return path.normalize().startsWith(workspaceRootPath);
     }
 
     /**
-     * 验证路径安全性，如果不安全则返回错误信息
+     * 解析路径并验证安全性，不安全时返回错误信息
      *
-     * @param path 要验证的路径
-     * @param operation 操作描述（用于错误信息）
+     * @param relativePath 相对路径
+     * @param operation    操作描述（用于错误信息）
      * @return 如果安全返回 null，否则返回错误信息
      */
-    private String validatePathSecurity(Path path, String operation) {
-        if (!isPathInsideWorkspace(path)) {
+    private String resolveAndValidate(Path fullPath, String operation) {
+        if (!isPathInsideWorkspace(fullPath)) {
             log.warn("[Observation] 安全检查失败: 路径在工作空间外");
-            String error = "错误: 只能" + operation + "工作空间内的路径";
-            System.out.println("   ❌ " + error);
-            return error;
+            return "错误: 只能" + operation + "工作空间内的路径";
         }
         return null;
     }
 
+    /**
+     * 读取文件内容并检查文件存在性
+     *
+     * @param fullPath 完整路径
+     * @param filePath 相对路径（用于错误信息）
+     * @return 文件内容，文件不存在时返回 null
+     */
+    private String readFileContent(Path fullPath, String filePath) throws IOException {
+        if (!Files.exists(fullPath)) {
+            return null;
+        }
+        return Files.readString(fullPath);
+    }
+
     // ==================== 工具方法 ====================
 
-    /**
-     * 创建文件并写入内容
-     *
-     * @param filePath 文件的相对路径（相对于工作空间）
-     * @param content  要写入的文件内容
-     * @return 操作结果信息
-     */
     @Tool(description = "创建一个新文件并写入指定内容。如果文件已存在则会覆盖。路径是相对于工作空间的相对路径。")
     public String createFile(
             @ToolParam(description = "文件的相对路径，例如: src/main/java/com/example/Hello.java") String filePath,
             @ToolParam(description = "要写入文件的完整内容") String content
     ) {
-        System.out.println("\n🔧 [Tool] createFile → " + filePath + " (" + (content != null ? content.length() : 0) + " 字符)");
-
-        log.info("");
-        log.info("========================================");
-        log.info("[Action] LLM 调用工具: createFile");
-        log.info("========================================");
-        log.info("参数:");
-        log.info("  filePath: {}", filePath);
-        log.info("  content: {} 字符", content != null ? content.length() : 0);
+        log.info("[Action] LLM 调用工具: createFile, filePath={}, content={} 字符",
+                filePath, content != null ? content.length() : 0);
 
         try {
             Path fullPath = resolvePath(filePath);
 
-            String securityError = validatePathSecurity(fullPath, "写入");
+            String securityError = resolveAndValidate(fullPath, "写入");
             if (securityError != null) {
                 return securityError;
             }
 
-            // 创建父目录
             Files.createDirectories(fullPath.getParent());
-            // 写入文件
             Files.writeString(fullPath, content != null ? content : "");
 
             log.info("[Observation] 文件创建成功: {}", fullPath.toAbsolutePath());
-            log.info("========================================");
-
-            String result = "成功创建文件: " + fullPath.toAbsolutePath();
-            System.out.println("   ✅ 已创建: " + fullPath.toAbsolutePath());
-            return result;
+            return "成功创建文件: " + fullPath.toAbsolutePath();
 
         } catch (IOException e) {
             log.error("[Observation] 创建文件失败: {}", e.getMessage());
-            String result = "创建文件失败: " + e.getMessage();
-            System.out.println("   ❌ " + result);
-            return result;
+            return "创建文件失败: " + e.getMessage();
         }
     }
 
-    /**
-     * 读取文件内容
-     *
-     * @param filePath 文件的相对路径（相对于工作空间）
-     * @return 文件内容或错误信息
-     */
     @Tool(description = "读取指定文件的内容。路径是相对于工作空间的相对路径。")
     public String readFile(
             @ToolParam(description = "要读取的文件的相对路径") String filePath
     ) {
-        System.out.println("\n🔧 [Tool] readFile → " + filePath);
-
-        log.info("");
-        log.info("========================================");
-        log.info("[Action] LLM 调用工具: readFile");
-        log.info("========================================");
-        log.info("参数: filePath = {}", filePath);
+        log.info("[Action] LLM 调用工具: readFile, filePath={}", filePath);
 
         try {
             Path fullPath = resolvePath(filePath);
 
-            String securityError = validatePathSecurity(fullPath, "读取");
+            String securityError = resolveAndValidate(fullPath, "读取");
             if (securityError != null) {
                 return securityError;
             }
 
-            if (!Files.exists(fullPath)) {
+            String content = readFileContent(fullPath, filePath);
+            if (content == null) {
                 log.warn("[Observation] 文件不存在: {}", fullPath);
-                String result = "错误: 文件不存在: " + filePath;
-                System.out.println("   ❌ " + result);
-                return result;
+                return "错误: 文件不存在: " + filePath;
             }
 
-            String content = Files.readString(fullPath);
             log.info("[Observation] 读取成功: {} ({} 字符)", fullPath, content.length());
-            log.info("========================================");
-            System.out.println("   ✅ 已读取 (" + content.length() + " 字符)");
             return content;
 
         } catch (IOException e) {
             log.error("[Observation] 读取文件失败: {}", e.getMessage());
-            String result = "读取文件失败: " + e.getMessage();
-            System.out.println("   ❌ " + result);
-            return result;
+            return "读取文件失败: " + e.getMessage();
         }
     }
 
-    /**
-     * 列出目录内容
-     *
-     * @param dirPath 目录的相对路径（相对于工作空间）
-     * @return 目录内容列表或错误信息
-     */
     @Tool(description = "列出指定目录下的所有文件和子目录。路径是相对于工作空间的相对路径，使用 '.' 表示工作空间根目录。")
     public String listDirectory(
             @ToolParam(description = "要列出的目录的相对路径，使用 '.' 表示根目录") String dirPath
     ) {
-        System.out.println("\n🔧 [Tool] listDirectory → " + dirPath);
-
-        log.info("");
-        log.info("========================================");
-        log.info("[Action] LLM 调用工具: listDirectory");
-        log.info("========================================");
-        log.info("参数: dirPath = {}", dirPath);
+        log.info("[Action] LLM 调用工具: listDirectory, dirPath={}", dirPath);
 
         try {
             Path fullPath = resolvePath(dirPath);
 
-            String securityError = validatePathSecurity(fullPath, "访问");
+            String securityError = resolveAndValidate(fullPath, "访问");
             if (securityError != null) {
                 return securityError;
             }
 
             if (!Files.exists(fullPath)) {
                 log.warn("[Observation] 目录不存在: {}", fullPath);
-                String result = "错误: 目录不存在: " + dirPath;
-                System.out.println("   ❌ " + result);
-                return result;
+                return "错误: 目录不存在: " + dirPath;
             }
 
             if (!Files.isDirectory(fullPath)) {
                 log.warn("[Observation] 路径不是目录: {}", fullPath);
-                String result = "错误: 路径不是目录: " + dirPath;
-                System.out.println("   ❌ " + result);
-                return result;
+                return "错误: 路径不是目录: " + dirPath;
             }
 
             StringBuilder sb = new StringBuilder();
             sb.append("目录内容 [").append(dirPath).append("]:\n");
 
-            final int[] count = {0};
             try (var stream = Files.list(fullPath)) {
                 stream.forEach(path -> {
                     String name = path.getFileName().toString();
@@ -232,62 +163,159 @@ public class CodeAgentTools {
                     } else {
                         sb.append("  [FILE] ").append(name).append("\n");
                     }
-                    count[0]++;
                 });
             }
 
             log.info("[Observation] 列出目录成功: {}", fullPath);
-            log.info("========================================");
-            System.out.println("   ✅ 已列出 (" + count[0] + " 项)");
             return sb.toString();
 
         } catch (IOException e) {
             log.error("[Observation] 列出目录失败: {}", e.getMessage());
-            String result = "列出目录失败: " + e.getMessage();
-            System.out.println("   ❌ " + result);
-            return result;
+            return "列出目录失败: " + e.getMessage();
         }
     }
 
-    /**
-     * 创建目录
-     *
-     * @param dirPath 目录的相对路径（相对于工作空间）
-     * @return 操作结果信息
-     */
     @Tool(description = "创建一个新目录。如果父目录不存在会自动创建。路径是相对于工作空间的相对路径。")
     public String createDirectory(
             @ToolParam(description = "要创建的目录的相对路径") String dirPath
     ) {
-        System.out.println("\n🔧 [Tool] createDirectory → " + dirPath);
-
-        log.info("");
-        log.info("========================================");
-        log.info("[Action] LLM 调用工具: createDirectory");
-        log.info("========================================");
-        log.info("参数: dirPath = {}", dirPath);
+        log.info("[Action] LLM 调用工具: createDirectory, dirPath={}", dirPath);
 
         try {
             Path fullPath = resolvePath(dirPath);
 
-            String securityError = validatePathSecurity(fullPath, "创建");
+            String securityError = resolveAndValidate(fullPath, "创建");
             if (securityError != null) {
                 return securityError;
             }
 
             Files.createDirectories(fullPath);
             log.info("[Observation] 目录创建成功: {}", fullPath.toAbsolutePath());
-            log.info("========================================");
-
-            String result = "成功创建目录: " + fullPath.toAbsolutePath();
-            System.out.println("   ✅ 已创建: " + fullPath.toAbsolutePath());
-            return result;
+            return "成功创建目录: " + fullPath.toAbsolutePath();
 
         } catch (IOException e) {
             log.error("[Observation] 创建目录失败: {}", e.getMessage());
-            String result = "创建目录失败: " + e.getMessage();
-            System.out.println("   ❌ " + result);
-            return result;
+            return "创建目录失败: " + e.getMessage();
         }
+    }
+
+    @Tool(description = "编辑已存在的文件，通过搜索替换的方式修改内容。" +
+            "重要: oldContent 必须精确匹配文件中的内容（包括空格、换行、缩进），且必须在文件中唯一出现。" +
+            "如果 oldContent 在文件中出现多次，编辑将被拒绝，需要包含更多上下文代码使其唯一。" +
+            "如果要删除某段内容，将 newContent 设为空字符串。" +
+            "如果需要批量替换所有匹配项，请使用 editFileAll 工具。")
+    public String editFile(
+            @ToolParam(description = "要编辑的文件的相对路径") String filePath,
+            @ToolParam(description = "要被替换的原始内容，必须精确匹配且在文件中唯一") String oldContent,
+            @ToolParam(description = "替换后的新内容，如果要删除则传空字符串") String newContent
+    ) {
+        log.info("[Action] LLM 调用工具: editFile, filePath={}, oldContent={} 字符, newContent={} 字符",
+                filePath, oldContent != null ? oldContent.length() : 0, newContent != null ? newContent.length() : 0);
+
+        if (oldContent == null || oldContent.isEmpty()) {
+            log.warn("[Observation] 参数错误: oldContent 不能为空");
+            return "错误: oldContent 不能为空，必须指定要替换的内容";
+        }
+
+        try {
+            Path fullPath = resolvePath(filePath);
+
+            String securityError = resolveAndValidate(fullPath, "编辑");
+            if (securityError != null) {
+                return securityError;
+            }
+
+            String currentContent = readFileContent(fullPath, filePath);
+            if (currentContent == null) {
+                log.warn("[Observation] 文件不存在: {}", fullPath);
+                return "错误: 文件不存在: " + filePath + "。请先使用 createFile 创建文件，或检查路径是否正确。";
+            }
+
+            if (!currentContent.contains(oldContent)) {
+                log.warn("[Observation] 未找到要替换的内容");
+                return "错误: 未在文件中找到要替换的内容。可能原因:\n" +
+                        "  1. 内容不完全匹配（注意空格、换行、缩进）\n" +
+                        "  2. 文件已被修改，内容不是最新的\n" +
+                        "  建议: 先使用 readFile 读取文件最新内容，确保 oldContent 精确匹配。";
+            }
+
+            int matchCount = countOccurrences(currentContent, oldContent);
+            if (matchCount > 1) {
+                log.warn("[Observation] oldContent 不唯一，发现 {} 处匹配，拒绝执行", matchCount);
+                return "错误: oldContent 在文件中出现了 " + matchCount + " 次，不是唯一的。\n" +
+                        "  为避免替换错误的位置，请在 oldContent 中包含更多上下文代码（如前后几行），使其在文件中唯一。\n" +
+                        "  如果确实需要替换所有匹配项，请使用 editFileAll 工具。";
+            }
+
+            String updatedContent = currentContent.replace(oldContent, newContent != null ? newContent : "");
+            Files.writeString(fullPath, updatedContent);
+
+            log.info("[Observation] 文件编辑成功: {}, 替换: {} 字符 → {} 字符",
+                    fullPath.toAbsolutePath(), oldContent.length(), newContent != null ? newContent.length() : 0);
+            return "成功编辑文件: " + fullPath.toAbsolutePath() +
+                    "\n  替换: " + oldContent.length() + " 字符 → " + (newContent != null ? newContent.length() : 0) + " 字符";
+
+        } catch (IOException e) {
+            log.error("[Observation] 编辑文件失败: {}", e.getMessage());
+            return "编辑文件失败: " + e.getMessage();
+        }
+    }
+
+    @Tool(description = "编辑文件并替换所有匹配的内容。与 editFile 类似，但会替换文件中所有匹配的内容而不是只替换第一处。" +
+            "适用于需要批量替换的场景，如重命名变量、更新导入语句等。")
+    public String editFileAll(
+            @ToolParam(description = "要编辑的文件的相对路径") String filePath,
+            @ToolParam(description = "要被替换的原始内容，必须精确匹配") String oldContent,
+            @ToolParam(description = "替换后的新内容") String newContent
+    ) {
+        log.info("[Action] LLM 调用工具: editFileAll, filePath={}, oldContent={} 字符, newContent={} 字符",
+                filePath, oldContent != null ? oldContent.length() : 0, newContent != null ? newContent.length() : 0);
+
+        if (oldContent == null || oldContent.isEmpty()) {
+            log.warn("[Observation] 参数错误: oldContent 不能为空");
+            return "错误: oldContent 不能为空，必须指定要替换的内容";
+        }
+
+        try {
+            Path fullPath = resolvePath(filePath);
+
+            String securityError = resolveAndValidate(fullPath, "编辑");
+            if (securityError != null) {
+                return securityError;
+            }
+
+            String currentContent = readFileContent(fullPath, filePath);
+            if (currentContent == null) {
+                log.warn("[Observation] 文件不存在: {}", fullPath);
+                return "错误: 文件不存在: " + filePath;
+            }
+
+            if (!currentContent.contains(oldContent)) {
+                log.warn("[Observation] 未找到要替换的内容");
+                return "错误: 未在文件中找到要替换的内容。请使用 readFile 确认文件内容。";
+            }
+
+            int matchCount = countOccurrences(currentContent, oldContent);
+            String updatedContent = currentContent.replace(oldContent, newContent != null ? newContent : "");
+            Files.writeString(fullPath, updatedContent);
+
+            log.info("[Observation] 文件编辑成功: {}, 替换了 {} 处匹配", fullPath.toAbsolutePath(), matchCount);
+            return "成功编辑文件: " + fullPath.toAbsolutePath() +
+                    "\n  共替换 " + matchCount + " 处匹配";
+
+        } catch (IOException e) {
+            log.error("[Observation] 编辑文件失败: {}", e.getMessage());
+            return "编辑文件失败: " + e.getMessage();
+        }
+    }
+
+    private int countOccurrences(String str, String sub) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = str.indexOf(sub, idx)) != -1) {
+            count++;
+            idx += sub.length();
+        }
+        return count;
     }
 }

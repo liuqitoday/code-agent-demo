@@ -1,5 +1,7 @@
 package com.liuqitech.codeagent.config;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpRequest;
@@ -20,22 +22,24 @@ import java.util.stream.Collectors;
  * HTTP 请求日志拦截器
  * 用于记录所有发送给 LLM 的请求和接收到的响应
  *
- * 这个拦截器会：
- * 1. 在控制台显示与 LLM 交互的关键信息（便于学习理解）
- * 2. 在日志文件中记录完整的请求/响应详情（便于调试）
+ * 轮次计数基于线程自动管理，无需外部重置
  */
 public class LoggingInterceptor implements ClientHttpRequestInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingInterceptor.class);
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    // 用于跟踪当前是第几轮对话（线程安全）
-    private static final AtomicInteger roundCounter = new AtomicInteger(0);
+    /**
+     * 基于线程的轮次计数器，每个线程（即每次用户请求）独立计数
+     */
+    private static final ThreadLocal<AtomicInteger> roundCounter =
+            ThreadLocal.withInitial(() -> new AtomicInteger(0));
 
     @Override
     public ClientHttpResponse intercept(HttpRequest request, byte[] body,
                                        ClientHttpRequestExecution execution) throws IOException {
 
-        int currentRound = roundCounter.incrementAndGet();
+        int currentRound = roundCounter.get().incrementAndGet();
 
         // ========== 记录请求 ==========
         String requestBody = new String(body, StandardCharsets.UTF_8);
@@ -58,53 +62,49 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
         return bufferedResponse;
     }
 
-    /**
-     * 重置轮次计数器（在新的用户请求开始时调用）
-     */
-    public static void resetRoundCounter() {
-        roundCounter.set(0);
-    }
-
     // ==================== 控制台输出（用户可见）====================
 
-    /**
-     * 在控制台显示请求摘要
-     */
     private void printRequestToConsole(String requestBody, int round) {
+        JsonNode root = parseJson(requestBody);
+        if (root == null) return;
+
         StringBuilder sb = new StringBuilder();
         sb.append("\n┌─────────────────────────────────────────────────────────────\n");
         sb.append("│ 📤 [Round ").append(round).append("] 发送请求给 LLM\n");
         sb.append("├─────────────────────────────────────────────────────────────\n");
 
-        // 提取并显示 System Prompt（仅第一轮显示）
-        if (round == 1) {
-            String systemPrompt = extractSystemPrompt(requestBody);
-            if (systemPrompt != null && !systemPrompt.isEmpty()) {
+        JsonNode messages = root.get("messages");
+        if (messages != null && messages.isArray()) {
+            // 第一轮显示 System Prompt
+            if (round == 1) {
+                String systemPrompt = findLastContentByRole(messages, "system");
+                if (systemPrompt != null && !systemPrompt.isEmpty()) {
+                    sb.append("│ \n");
+                    sb.append("│ 📋 System Prompt:\n");
+                    appendMultilineContent(sb, systemPrompt, 300);
+                }
+            }
+
+            // 用户消息
+            String userMessage = findLastContentByRole(messages, "user");
+            if (userMessage != null && !userMessage.isEmpty()) {
                 sb.append("│ \n");
-                sb.append("│ 📋 System Prompt:\n");
-                appendMultilineContent(sb, systemPrompt, 300);
+                sb.append("│ 👤 用户消息:\n");
+                appendMultilineContent(sb, userMessage, 500);
+            }
+
+            // 工具结果
+            String toolResult = findLastContentByRole(messages, "tool");
+            if (toolResult != null && !toolResult.isEmpty()) {
+                sb.append("│ \n");
+                sb.append("│ 🔧 工具执行结果:\n");
+                appendMultilineContent(sb, toolResult, 300);
             }
         }
 
-        // 提取并显示用户消息
-        String userMessage = extractLastUserMessage(requestBody);
-        if (userMessage != null && !userMessage.isEmpty()) {
-            sb.append("│ \n");
-            sb.append("│ 👤 用户消息:\n");
-            appendMultilineContent(sb, userMessage, 500);
-        }
-
-        // 提取并显示工具结果（如果有）
-        String toolResult = extractToolResult(requestBody);
-        if (toolResult != null && !toolResult.isEmpty()) {
-            sb.append("│ \n");
-            sb.append("│ 🔧 工具执行结果:\n");
-            appendMultilineContent(sb, toolResult, 300);
-        }
-
-        // 显示可用工具（仅第一轮显示）
+        // 第一轮显示可用工具
         if (round == 1) {
-            List<String> tools = extractToolNames(requestBody);
+            List<String> tools = extractToolNames(root);
             if (!tools.isEmpty()) {
                 sb.append("│ \n");
                 sb.append("│ 🛠️ 可用工具: ").append(String.join(", ", tools)).append("\n");
@@ -114,17 +114,13 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
         sb.append("│ \n");
         sb.append("└─────────────────────────────────────────────────────────────\n");
 
-        System.out.print(sb.toString());
+        System.out.print(sb);
         System.out.flush();
     }
 
-    /**
-     * 追加多行内容到 StringBuilder，带缩进和长度限制
-     */
     private void appendMultilineContent(StringBuilder sb, String content, int maxLength) {
         if (content == null) return;
 
-        // 截断过长的内容
         boolean truncated = false;
         if (content.length() > maxLength) {
             content = content.substring(0, maxLength);
@@ -133,7 +129,6 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
 
         String[] lines = content.split("\n");
         for (String line : lines) {
-            // 每行也限制长度
             if (line.length() > 70) {
                 sb.append("│    ").append(line, 0, 70).append("\n");
                 sb.append("│    ").append(line.substring(70, Math.min(line.length(), 140)));
@@ -148,311 +143,180 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
         }
     }
 
-    /**
-     * 在控制台显示响应摘要
-     */
     private void printResponseToConsole(String responseBody, long duration, int round) {
+        JsonNode root = parseJson(responseBody);
+
         StringBuilder sb = new StringBuilder();
         sb.append("\n┌─────────────────────────────────────────────────────────────\n");
         sb.append("│ 📥 [Round ").append(round).append("] 收到 LLM 响应 (耗时: ").append(duration).append("ms)\n");
         sb.append("├─────────────────────────────────────────────────────────────\n");
 
-        // 检查是否有工具调用
-        List<String> toolCalls = extractToolCalls(responseBody);
-        if (!toolCalls.isEmpty()) {
-            sb.append("│ 🔧 LLM 决定调用工具:\n");
-            for (String toolCall : toolCalls) {
-                sb.append("│    → ").append(toolCall).append("\n");
-            }
-            sb.append("│ \n");
-            sb.append("│ [等待工具执行结果，然后继续下一轮对话...]\n");
-        } else {
-            // 提取最终回答
-            String content = extractContent(responseBody);
-            if (content != null && !content.isEmpty()) {
-                sb.append("│ 💬 LLM 最终回答:\n");
-                // 显示回答的前几行
-                String[] lines = content.split("\n");
-                int maxLines = Math.min(lines.length, 5);
-                for (int i = 0; i < maxLines; i++) {
-                    String line = lines[i];
-                    if (line.length() > 70) {
-                        line = line.substring(0, 70) + "...";
-                    }
-                    sb.append("│    ").append(line).append("\n");
+        if (root != null) {
+            // 检查是否有工具调用
+            List<String> toolCalls = extractToolCalls(root);
+            if (!toolCalls.isEmpty()) {
+                sb.append("│ 🔧 LLM 决定调用工具:\n");
+                for (String toolCall : toolCalls) {
+                    sb.append("│    → ").append(toolCall).append("\n");
                 }
-                if (lines.length > maxLines) {
-                    sb.append("│    ... (共 ").append(lines.length).append(" 行)\n");
-                }
-            }
-        }
-
-        // 显示思考过程（如果有）
-        String reasoning = extractReasoningContent(responseBody);
-        if (reasoning != null && !reasoning.isEmpty()) {
-            sb.append("│ \n");
-            sb.append("│ 💭 思考过程: ");
-            if (reasoning.length() > 100) {
-                sb.append(reasoning, 0, 100).append("...");
+                sb.append("│ \n");
+                sb.append("│ [等待工具执行结果，然后继续下一轮对话...]\n");
             } else {
-                sb.append(reasoning);
+                String content = extractResponseContent(root);
+                if (content != null && !content.isEmpty()) {
+                    sb.append("│ 💬 LLM 最终回答:\n");
+                    String[] lines = content.split("\n");
+                    int maxLines = Math.min(lines.length, 5);
+                    for (int i = 0; i < maxLines; i++) {
+                        String line = lines[i];
+                        if (line.length() > 70) {
+                            line = line.substring(0, 70) + "...";
+                        }
+                        sb.append("│    ").append(line).append("\n");
+                    }
+                    if (lines.length > maxLines) {
+                        sb.append("│    ... (共 ").append(lines.length).append(" 行)\n");
+                    }
+                }
             }
-            sb.append("\n");
+
+            // 思考过程
+            String reasoning = extractReasoningContent(root);
+            if (reasoning != null && !reasoning.isEmpty()) {
+                sb.append("│ \n");
+                sb.append("│ 💭 思考过程: ");
+                if (reasoning.length() > 100) {
+                    sb.append(reasoning, 0, 100).append("...");
+                } else {
+                    sb.append(reasoning);
+                }
+                sb.append("\n");
+            }
         }
 
         sb.append("└─────────────────────────────────────────────────────────────\n");
 
-        System.out.print(sb.toString());
+        System.out.print(sb);
         System.out.flush();
     }
 
-    // ==================== JSON 解析辅助方法 ====================
+    // ==================== Jackson JSON 解析方法 ====================
 
-    /**
-     * 提取最后一条用户消息
-     * JSON 格式: {"content":"xxx","role":"user"}
-     */
-    private String extractLastUserMessage(String json) {
-        return extractContentByRole(json, "user");
-    }
-
-    /**
-     * 提取工具执行结果
-     * JSON 格式: {"content":"xxx","role":"tool",...}
-     */
-    private String extractToolResult(String json) {
-        return extractContentByRole(json, "tool");
-    }
-
-    /**
-     * 提取 System Prompt
-     * JSON 格式: {"content":"xxx","role":"system"}
-     */
-    private String extractSystemPrompt(String json) {
-        return extractContentByRole(json, "system");
-    }
-
-    /**
-     * 根据角色提取内容（使用简单字符串处理，避免正则栈溢出）
-     */
-    private String extractContentByRole(String json, String role) {
-        String rolePattern = "\"role\":\"" + role + "\"";
-        String rolePatternWithSpace = "\"role\": \"" + role + "\"";
-
-        int roleIndex = json.lastIndexOf(rolePattern);
-        if (roleIndex == -1) {
-            roleIndex = json.lastIndexOf(rolePatternWithSpace);
-        }
-        if (roleIndex == -1) {
+    private JsonNode parseJson(String json) {
+        try {
+            return objectMapper.readTree(json);
+        } catch (Exception e) {
+            log.debug("JSON 解析失败: {}", e.getMessage());
             return null;
         }
-
-        // 向前查找对应的 content
-        // 找到这个 role 之前最近的 "content":"
-        String contentKey = "\"content\":\"";
-        String contentKeyWithSpace = "\"content\": \"";
-
-        int contentIndex = json.lastIndexOf(contentKey, roleIndex);
-        if (contentIndex == -1) {
-            contentIndex = json.lastIndexOf(contentKeyWithSpace, roleIndex);
-            if (contentIndex != -1) {
-                contentIndex += contentKeyWithSpace.length();
-            }
-        } else {
-            contentIndex += contentKey.length();
-        }
-
-        if (contentIndex == -1 || contentIndex >= roleIndex) {
-            return null;
-        }
-
-        // 从 contentIndex 开始，找到结束引号（处理转义）
-        return extractQuotedString(json, contentIndex);
     }
 
     /**
-     * 从指定位置提取引号内的字符串（处理转义字符）
+     * 在 messages 数组中找到指定角色的最后一条消息的 content
      */
-    private String extractQuotedString(String json, int startIndex) {
-        StringBuilder result = new StringBuilder();
-        boolean escaped = false;
-
-        for (int i = startIndex; i < json.length(); i++) {
-            char c = json.charAt(i);
-
-            if (escaped) {
-                result.append(c);
-                escaped = false;
-            } else if (c == '\\') {
-                result.append(c);
-                escaped = true;
-            } else if (c == '"') {
-                // 找到结束引号
-                break;
-            } else {
-                result.append(c);
+    private String findLastContentByRole(JsonNode messages, String role) {
+        String result = null;
+        for (JsonNode msg : messages) {
+            JsonNode roleNode = msg.get("role");
+            if (roleNode != null && role.equals(roleNode.asText())) {
+                JsonNode contentNode = msg.get("content");
+                if (contentNode != null && !contentNode.isNull()) {
+                    result = contentNode.asText();
+                }
             }
         }
-
-        return unescapeJson(result.toString());
+        return result;
     }
 
     /**
-     * 提取可用工具名称列表（使用简单字符串处理）
+     * 从 tools 数组中提取工具名称列表
      */
-    private List<String> extractToolNames(String json) {
+    private List<String> extractToolNames(JsonNode root) {
         List<String> tools = new ArrayList<>();
-        String searchKey = "\"name\":";
-        int index = 0;
-
-        while ((index = json.indexOf(searchKey, index)) != -1) {
-            // 检查是否在 function 块内
-            int funcIndex = json.lastIndexOf("\"function\"", index);
-            if (funcIndex != -1 && funcIndex > json.lastIndexOf("}", index)) {
-                // 找到 name 后面的值
-                int valueStart = json.indexOf("\"", index + searchKey.length());
-                if (valueStart != -1) {
-                    int valueEnd = json.indexOf("\"", valueStart + 1);
-                    if (valueEnd != -1) {
-                        String toolName = json.substring(valueStart + 1, valueEnd);
-                        if (!tools.contains(toolName) && !toolName.isEmpty()) {
-                            tools.add(toolName);
-                        }
+        JsonNode toolsNode = root.get("tools");
+        if (toolsNode != null && toolsNode.isArray()) {
+            for (JsonNode tool : toolsNode) {
+                JsonNode function = tool.get("function");
+                if (function != null) {
+                    JsonNode nameNode = function.get("name");
+                    if (nameNode != null) {
+                        tools.add(nameNode.asText());
                     }
                 }
             }
-            index += searchKey.length();
         }
         return tools;
     }
 
     /**
-     * 提取工具调用信息（使用简单字符串处理）
+     * 从响应中提取工具调用信息
      */
-    private List<String> extractToolCalls(String json) {
+    private List<String> extractToolCalls(JsonNode root) {
         List<String> calls = new ArrayList<>();
-
-        // 查找 tool_calls 数组
-        int toolCallsIndex = json.indexOf("\"tool_calls\"");
-        if (toolCallsIndex == -1) {
+        JsonNode choices = root.get("choices");
+        if (choices == null || !choices.isArray() || choices.isEmpty()) {
             return calls;
         }
 
-        // 在 tool_calls 之后查找 function
-        String searchKey = "\"function\"";
-        int index = toolCallsIndex;
+        JsonNode message = choices.get(0).get("message");
+        if (message == null) return calls;
 
-        while ((index = json.indexOf(searchKey, index)) != -1) {
-            // 提取函数名
-            int nameIndex = json.indexOf("\"name\"", index);
-            if (nameIndex != -1 && nameIndex < index + 200) {
-                int nameStart = json.indexOf("\"", nameIndex + 6);
-                int nameEnd = nameStart != -1 ? json.indexOf("\"", nameStart + 1) : -1;
+        JsonNode toolCallsNode = message.get("tool_calls");
+        if (toolCallsNode == null || !toolCallsNode.isArray()) {
+            return calls;
+        }
 
-                if (nameStart != -1 && nameEnd != -1) {
-                    String funcName = json.substring(nameStart + 1, nameEnd);
-
-                    // 提取参数
-                    int argsIndex = json.indexOf("\"arguments\"", nameEnd);
-                    String args = "";
-                    if (argsIndex != -1 && argsIndex < nameEnd + 100) {
-                        int argsStart = json.indexOf("\"", argsIndex + 11);
-                        if (argsStart != -1) {
-                            args = extractQuotedString(json, argsStart + 1);
-                            if (args != null && args.length() > 80) {
-                                args = args.substring(0, 80) + "...";
-                            }
-                        }
+        for (JsonNode tc : toolCallsNode) {
+            JsonNode function = tc.get("function");
+            if (function != null) {
+                String name = function.has("name") ? function.get("name").asText() : "unknown";
+                String args = "";
+                if (function.has("arguments")) {
+                    args = function.get("arguments").asText();
+                    if (args.length() > 80) {
+                        args = args.substring(0, 80) + "...";
                     }
-
-                    calls.add(funcName + "(" + (args != null ? args : "") + ")");
                 }
+                calls.add(name + "(" + args + ")");
             }
-            index += searchKey.length();
         }
         return calls;
     }
 
     /**
-     * 提取响应内容（在 choices 中的 assistant 消息）
+     * 提取响应中 assistant 消息的 content
      */
-    private String extractContent(String json) {
-        // 查找 choices 数组中的 content
-        int choicesIndex = json.indexOf("\"choices\"");
-        if (choicesIndex == -1) {
+    private String extractResponseContent(JsonNode root) {
+        JsonNode choices = root.get("choices");
+        if (choices == null || !choices.isArray() || choices.isEmpty()) {
             return null;
         }
+        JsonNode message = choices.get(0).get("message");
+        if (message == null) return null;
 
-        // 在 choices 之后查找 message 中的 content
-        int messageIndex = json.indexOf("\"message\"", choicesIndex);
-        if (messageIndex == -1) {
-            return null;
-        }
-
-        int contentIndex = json.indexOf("\"content\"", messageIndex);
-        if (contentIndex == -1) {
-            return null;
-        }
-
-        // 找到 content 的值
-        int valueStart = json.indexOf(":", contentIndex + 9);
-        if (valueStart == -1) {
-            return null;
-        }
-
-        // 跳过空格找到引号
-        int quoteStart = -1;
-        for (int i = valueStart + 1; i < json.length() && i < valueStart + 10; i++) {
-            if (json.charAt(i) == '"') {
-                quoteStart = i;
-                break;
-            } else if (json.charAt(i) == 'n') {
-                // null 值
-                return null;
-            }
-        }
-
-        if (quoteStart == -1) {
-            return null;
-        }
-
-        return extractQuotedString(json, quoteStart + 1);
+        JsonNode contentNode = message.get("content");
+        if (contentNode == null || contentNode.isNull()) return null;
+        return contentNode.asText();
     }
 
     /**
-     * 提取思考过程
+     * 提取思考过程（reasoning_content）
      */
-    private String extractReasoningContent(String json) {
-        String key = "\"reasoning_content\"";
-        int keyIndex = json.indexOf(key);
-        if (keyIndex == -1) {
+    private String extractReasoningContent(JsonNode root) {
+        JsonNode choices = root.get("choices");
+        if (choices == null || !choices.isArray() || choices.isEmpty()) {
             return null;
         }
+        JsonNode message = choices.get(0).get("message");
+        if (message == null) return null;
 
-        int valueStart = json.indexOf("\"", keyIndex + key.length() + 1);
-        if (valueStart == -1) {
-            return null;
-        }
-
-        return extractQuotedString(json, valueStart + 1);
-    }
-
-    /**
-     * 反转义 JSON 字符串
-     */
-    private String unescapeJson(String str) {
-        if (str == null) return null;
-        return str.replace("\\n", "\n")
-                  .replace("\\t", "\t")
-                  .replace("\\\"", "\"")
-                  .replace("\\\\", "\\");
+        JsonNode reasoning = message.get("reasoning_content");
+        if (reasoning == null || reasoning.isNull()) return null;
+        return reasoning.asText();
     }
 
     // ==================== 日志文件记录（详细信息）====================
 
-    /**
-     * 记录 HTTP 请求详情到日志文件
-     */
     private void logRequest(HttpRequest request, String requestBody, int round) {
         log.info("");
         log.info("╔════════════════════════════════════════════════════════════════");
@@ -474,11 +338,7 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
         if (!requestBody.isEmpty()) {
             log.info("║ Request Body:");
             log.info("╠════════════════════════════════════════════════════════════════");
-            if (isJson(requestBody)) {
-                log.info("║ {}", formatJson(requestBody));
-            } else {
-                log.info("║ {}", requestBody);
-            }
+            log.info("║ {}", prettyPrint(requestBody));
         } else {
             log.info("║ Request Body: (empty)");
         }
@@ -486,9 +346,6 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
         log.info("╚════════════════════════════════════════════════════════════════");
     }
 
-    /**
-     * 记录 HTTP 响应详情到日志文件
-     */
     private void logResponse(BufferedClientHttpResponse response, String responseBody, long duration, int round) throws IOException {
         log.info("");
         log.info("╔════════════════════════════════════════════════════════════════");
@@ -506,11 +363,7 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
         if (!responseBody.isEmpty()) {
             log.info("║ Response Body:");
             log.info("╠════════════════════════════════════════════════════════════════");
-            if (isJson(responseBody)) {
-                log.info("║ {}", formatJson(responseBody));
-            } else {
-                log.info("║ {}", responseBody);
-            }
+            log.info("║ {}", prettyPrint(responseBody));
         } else {
             log.info("║ Response Body: (empty)");
         }
@@ -520,106 +373,26 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
     }
 
     /**
-     * 判断字符串是否为 JSON
+     * 使用 Jackson 格式化 JSON，失败时返回原始字符串
      */
-    private boolean isJson(String str) {
-        if (str == null || str.isEmpty()) {
-            return false;
-        }
-        String trimmed = str.trim();
-        return (trimmed.startsWith("{") && trimmed.endsWith("}"))
-            || (trimmed.startsWith("[") && trimmed.endsWith("]"));
-    }
-
-    /**
-     * 简单的 JSON 格式化（用于日志输出）
-     * 注意：这是一个简化版本，仅用于日志美化
-     */
-    private String formatJson(String json) {
+    private String prettyPrint(String json) {
         try {
-            // 简单的缩进处理
-            StringBuilder formatted = new StringBuilder();
-            int indent = 0;
-            boolean inString = false;
-            boolean escape = false;
-
-            for (char c : json.toCharArray()) {
-                if (escape) {
-                    formatted.append(c);
-                    escape = false;
-                    continue;
-                }
-
-                if (c == '\\') {
-                    formatted.append(c);
-                    escape = true;
-                    continue;
-                }
-
-                if (c == '"') {
-                    inString = !inString;
-                    formatted.append(c);
-                    continue;
-                }
-
-                if (inString) {
-                    formatted.append(c);
-                    continue;
-                }
-
-                switch (c) {
-                    case '{':
-                    case '[':
-                        formatted.append(c);
-                        formatted.append('\n');
-                        indent++;
-                        formatted.append("║ ").append("  ".repeat(indent));
-                        break;
-                    case '}':
-                    case ']':
-                        formatted.append('\n');
-                        indent--;
-                        formatted.append("║ ").append("  ".repeat(indent));
-                        formatted.append(c);
-                        break;
-                    case ',':
-                        formatted.append(c);
-                        formatted.append('\n');
-                        formatted.append("║ ").append("  ".repeat(indent));
-                        break;
-                    case ':':
-                        formatted.append(c);
-                        formatted.append(' ');
-                        break;
-                    case ' ':
-                    case '\n':
-                    case '\r':
-                    case '\t':
-                        // 跳过空白字符
-                        break;
-                    default:
-                        formatted.append(c);
-                }
-            }
-
-            return formatted.toString();
+            Object obj = objectMapper.readValue(json, Object.class);
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(obj);
         } catch (Exception e) {
-            // 如果格式化失败，返回原始字符串
             return json;
         }
     }
 
     /**
      * 缓冲的 HTTP 响应包装器
-     * 允许多次读取响应体（用于日志记录后仍能被 Spring AI 读取）
      */
     private static class BufferedClientHttpResponse implements ClientHttpResponse {
         private final ClientHttpResponse response;
-        private byte[] body;
+        private final byte[] body;
 
         public BufferedClientHttpResponse(ClientHttpResponse response) throws IOException {
             this.response = response;
-            // 立即读取并缓存响应体
             this.body = new BufferedReader(
                 new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))
                 .lines()
@@ -644,7 +417,6 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
 
         @Override
         public java.io.InputStream getBody() throws IOException {
-            // 返回缓存的响应体
             return new java.io.ByteArrayInputStream(body);
         }
 
@@ -653,9 +425,6 @@ public class LoggingInterceptor implements ClientHttpRequestInterceptor {
             return response.getHeaders();
         }
 
-        /**
-         * 获取缓存的响应体字符串（用于日志记录）
-         */
         public String getBodyAsString() {
             return new String(body, StandardCharsets.UTF_8);
         }

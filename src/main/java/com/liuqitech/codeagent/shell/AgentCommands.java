@@ -12,10 +12,7 @@ import java.io.PrintWriter;
 
 /**
  * Agent Shell 命令
- * 定义命令行交互界面的所有可用命令
- *
- * 注意：由于 Spring AI 流式模式 + Tool Calling 存在兼容性问题（toolName 为 null），
- * 当需要工具调用时使用阻塞模式。
+ * 唯一与终端交互的层，负责所有控制台输出
  */
 @ShellComponent
 public class AgentCommands {
@@ -30,10 +27,6 @@ public class AgentCommands {
         this.terminal = terminal;
     }
 
-    /**
-     * 生成代码命令
-     * 由于需要工具调用（创建文件），使用阻塞模式确保稳定性
-     */
     @ShellMethod(value = "根据描述生成代码", key = {"generate", "gen", "g"})
     public void generate(
             @ShellOption(
@@ -61,19 +54,16 @@ public class AgentCommands {
             return;
         }
 
-        // 构建提示词，包含文件夹信息
         StringBuilder promptBuilder = new StringBuilder(description);
 
         if (save) {
-            promptBuilder.append("\n\n请将生成的代码保存到文件中。");
+            promptBuilder.append("\n\n请将代码保存到文件。");
             if (folder != null && !folder.isBlank()) {
-                promptBuilder.append("\n重要：请将所有文件保存在 '")
-                    .append(folder)
-                    .append("' 目录下。如果需要创建子目录结构，请基于这个目录。");
+                promptBuilder.append("目标目录: ").append(folder);
                 writer.println("\n[目标文件夹]: " + folder);
             }
         } else {
-            promptBuilder.append("\n\n只需要展示代码，不需要保存到文件。");
+            promptBuilder.append("\n\n只展示代码，不要保存文件。");
         }
 
         String prompt = promptBuilder.toString();
@@ -81,18 +71,10 @@ public class AgentCommands {
         writer.println("\n[处理中] 正在生成代码，请稍候...\n");
         writer.flush();
 
-        // 使用阻塞模式（工具调用更稳定）
         AgentResponse response = codeAgent.execute(prompt);
-        writer.println(response.getOutput());
-        writer.flush();
+        printResponse(response, writer);
     }
 
-    /**
-     * 交互式对话命令 - 使用流式输出
-     * 纯文本对话不涉及工具调用，可以安全使用流式模式
-     *
-     * 注意：使用 MessageChatMemoryAdvisor 后，消息历史由 Advisor 自动管理
-     */
     @ShellMethod(value = "向 Agent 提问（流式输出）", key = {"ask", "a"})
     public void ask(
             @ShellOption(help = "你的问题或请求") String question
@@ -108,7 +90,6 @@ public class AgentCommands {
         writer.println("\n[思考中] ...\n");
         writer.flush();
 
-        // 尝试流式输出，如果失败则回退到阻塞模式
         try {
             codeAgent.executeStream(question)
                 .doOnNext(chunk -> {
@@ -118,24 +99,18 @@ public class AgentCommands {
                 .doOnComplete(() -> {
                     writer.println("\n");
                     writer.flush();
-                    // 注意：MessageChatMemoryAdvisor 会自动管理消息历史，无需手动保存
                 })
                 .blockLast();
 
         } catch (Exception e) {
-            // 如果流式失败（可能涉及工具调用），回退到阻塞模式
             writer.println("\n[切换模式] 切换到标准模式...\n");
             writer.flush();
 
             AgentResponse response = codeAgent.execute(question);
-            writer.println(response.getOutput());
-            writer.flush();
+            printResponse(response, writer);
         }
     }
 
-    /**
-     * 快速问答 - 使用阻塞模式，更稳定
-     */
     @ShellMethod(value = "向 Agent 提问（稳定模式）", key = {"query", "q"})
     public void query(
             @ShellOption(help = "你的问题或请求") String question
@@ -152,26 +127,19 @@ public class AgentCommands {
         writer.flush();
 
         AgentResponse response = codeAgent.execute(question);
-        writer.println(response.getOutput());
-        writer.flush();
+        printResponse(response, writer);
     }
 
-    /**
-     * 清空对话历史（开始新会话）
-     */
     @ShellMethod(value = "清空对话历史", key = {"clear", "c"})
     public String clear() {
         codeAgent.clearMemory();
         return "[成功] 对话历史已清空，新会话 ID: " + codeAgent.getConversationId();
     }
 
-    /**
-     * 显示当前配置
-     */
     @ShellMethod(value = "显示当前配置信息", key = {"config", "cfg"})
     public String showConfig() {
         StringBuilder sb = new StringBuilder();
-        sb.append("📋 当前配置:\n");
+        sb.append("当前配置:\n");
         sb.append("┌────────────────────────────────────────┐\n");
         sb.append("│ 工作空间: ").append(agentProperties.getWorkspace()).append("\n");
         sb.append("│ 默认语言: ").append(agentProperties.getDefaultLanguage()).append("\n");
@@ -183,9 +151,6 @@ public class AgentCommands {
         return sb.toString();
     }
 
-    /**
-     * 显示帮助信息
-     */
     @ShellMethod(value = "显示使用帮助", key = {"guide"})
     public String guide() {
         return """
@@ -221,5 +186,43 @@ public class AgentCommands {
                - 如果遇到超时，尝试用 query 代替 ask
             ═══════════════════════════════════════════════════════════════
             """;
+    }
+
+    /**
+     * 统一处理 AgentResponse 的控制台输出
+     */
+    private void printResponse(AgentResponse response, PrintWriter writer) {
+        if (response.isSuccess()) {
+            // 显示思考过程
+            String reasoning = response.getReasoningContent();
+            if (reasoning != null && !reasoning.isEmpty()) {
+                writer.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                writer.println("[思考过程]");
+                writer.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                writer.println(reasoning.trim());
+                writer.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            }
+
+            // 显示响应内容
+            String message = response.getMessage();
+            if (message != null && !message.isEmpty()) {
+                writer.println("\n" + message);
+            } else if (reasoning == null || reasoning.isEmpty()) {
+                writer.println("(无响应内容)");
+            }
+
+            // 显示耗时
+            long durationMs = response.getDurationMs();
+            String timeStr;
+            if (durationMs < 1000) {
+                timeStr = durationMs + "ms";
+            } else {
+                timeStr = String.format("%.1fs", durationMs / 1000.0);
+            }
+            writer.println("\n完成 (耗时: " + timeStr + ")\n");
+        } else {
+            writer.println("\n[错误] " + response.getError());
+        }
+        writer.flush();
     }
 }

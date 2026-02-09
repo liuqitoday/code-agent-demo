@@ -1,82 +1,51 @@
 package com.liuqitech.codeagent.agent;
 
 /**
- * Agent 响应类
- * 封装 Agent 执行结果
+ * Agent 响应类（不可变）
+ * 封装 Agent 执行结果，包含响应内容、思考过程和耗时信息
  */
 public class AgentResponse {
 
-    /**
-     * 是否执行成功
-     */
-    private boolean success;
+    private final boolean success;
+    private final String message;
+    private final String error;
+    private final String reasoningContent;
+    private final long durationMs;
 
-    /**
-     * 输出消息（成功时的响应内容）
-     */
-    private String message;
-
-    /**
-     * 错误信息（失败时的错误描述）
-     */
-    private String error;
-
-    public AgentResponse() {
+    private AgentResponse(boolean success, String message, String error,
+                          String reasoningContent, long durationMs) {
+        this.success = success;
+        this.message = message;
+        this.error = error;
+        this.reasoningContent = reasoningContent;
+        this.durationMs = durationMs;
     }
 
-    public static AgentResponse success(String message) {
-        AgentResponse response = new AgentResponse();
-        response.success = true;
-        response.message = message;
-        return response;
+    public static AgentResponse success(String message, String reasoningContent, long durationMs) {
+        return new AgentResponse(true, message, null, reasoningContent, durationMs);
     }
 
     public static AgentResponse error(String error) {
-        AgentResponse response = new AgentResponse();
-        response.success = false;
-        response.error = error;
-        return response;
+        return new AgentResponse(false, null, error, null, 0);
     }
 
     public boolean isSuccess() {
         return success;
     }
 
-    public void setSuccess(boolean success) {
-        this.success = success;
-    }
-
     public String getMessage() {
         return message;
-    }
-
-    public void setMessage(String message) {
-        this.message = message;
     }
 
     public String getError() {
         return error;
     }
 
-    public void setError(String error) {
-        this.error = error;
+    public String getReasoningContent() {
+        return reasoningContent;
     }
 
-    /**
-     * 格式化输出结果
-     */
-    public String getOutput() {
-        if (success) {
-            return message != null ? message : "";
-        } else {
-            return "[执行失败] " + (error != null ? error : "未知错误");
-        }
-    }
-
-    /**
-     * 获取失败响应格式化输出
-     */
-    public String getErrorOutput() {
-        return "[执行失败] " + (error != null ? error : "未知错误");
+    public long getDurationMs() {
+        return durationMs;
     }
 }

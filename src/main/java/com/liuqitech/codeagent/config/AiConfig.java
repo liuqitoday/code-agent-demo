@@ -9,19 +9,22 @@ import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.ClientHttpRequestFactory;
+import org.springframework.retry.annotation.EnableRetry;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 
 /**
  * AI 配置类
- * 配置 Spring AI 的 ChatMemory 和 RestClient
+ * 配置 Spring AI 的 ChatMemory、RestClient 和重试机制
  *
  * 说明：
  * 1. ChatMemory 用于管理对话历史，使用 MessageWindowChatMemory 实现
  * 2. RestClient.Builder 配置超时和日志拦截器
+ * 3. @EnableRetry 启用 Spring Retry 支持
  */
 @Configuration
+@EnableRetry
 public class AiConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AiConfig.class);
